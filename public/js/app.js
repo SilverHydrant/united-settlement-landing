@@ -75,11 +75,19 @@
   document.querySelectorAll('.how-next-btn[data-next]').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.preventDefault();
-      var next = btn.getAttribute('data-next');
-      activateHowPanel(next);
-      // Scroll the tabs bar into view so the user sees the new panel
-      var wrap = document.querySelector('.how-tabs-wrap');
-      if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Anchor scroll to the tabs bar so the panel swap doesn't yank
+      // the user up or down when the new panel has a different height
+      var tabsBar = document.querySelector('.how-tabs');
+      var prevTop = tabsBar ? tabsBar.getBoundingClientRect().top : 0;
+      activateHowPanel(btn.getAttribute('data-next'));
+      if (tabsBar) {
+        var newTop = tabsBar.getBoundingClientRect().top;
+        var delta = newTop - prevTop;
+        if (delta !== 0) {
+          // Keep the tabs bar visually in the same spot on screen
+          window.scrollBy({ top: delta, left: 0, behavior: 'instant' });
+        }
+      }
     });
   });
 
