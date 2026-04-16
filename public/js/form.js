@@ -44,16 +44,29 @@
 
   function validateForm() {
     var fname = document.getElementById('fname').value.trim();
+    var lname = document.getElementById('lname').value.trim();
     var phone = document.getElementById('phone').value.replace(/\D/g, '');
     var email = document.getElementById('email').value.trim();
+    var dob = document.getElementById('dob').value;
     var state = document.getElementById('state').value;
     var pripolicy = document.getElementById('pripolicy').checked;
 
     var valid = true;
 
     if (!validateField('fname', fname.length >= 2 && /^[a-zA-Z\s\-']+$/.test(fname), 'Please enter a valid first name.')) valid = false;
+    if (!validateField('lname', lname.length >= 2 && /^[a-zA-Z\s\-']+$/.test(lname), 'Please enter a valid last name.')) valid = false;
     if (!validateField('phone', phone.length === 10, 'Please enter a valid 10-digit phone number.')) valid = false;
     if (!validateField('email', /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Please enter a valid email address.')) valid = false;
+    // DOB: must be a valid date AND age 18-99
+    var dobValid = false;
+    if (dob) {
+      var dobDate = new Date(dob);
+      if (!isNaN(dobDate.getTime())) {
+        var age = (Date.now() - dobDate.getTime()) / (365.25 * 24 * 3600 * 1000);
+        dobValid = age >= 18 && age <= 99;
+      }
+    }
+    if (!validateField('dob', dobValid, 'You must be 18 or older.')) valid = false;
     if (!validateField('state', state !== '', 'Please select your state.')) valid = false;
     if (!validateField('pripolicy', pripolicy, 'You must agree to the privacy policy.')) valid = false;
 
@@ -114,8 +127,10 @@
       // Collect data
       var formData = {
         fname: document.getElementById('fname').value.trim(),
+        lname: document.getElementById('lname').value.trim(),
         phone: document.getElementById('phone').value.replace(/\D/g, ''),
         email: document.getElementById('email').value.trim(),
+        dob: document.getElementById('dob').value,
         calltime: document.getElementById('calltime').value,
         state: document.getElementById('state').value,
         lamount: window.DebtSlider ? window.DebtSlider.getValue() : 15,
@@ -237,7 +252,7 @@
   }
 
   // Clear error on input
-  ['fname', 'phone', 'email', 'calltime', 'state', 'pripolicy'].forEach(function(id) {
+  ['fname', 'lname', 'phone', 'email', 'dob', 'calltime', 'state', 'pripolicy'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) {
       var eventType = el.type === 'checkbox' ? 'change' : 'input';

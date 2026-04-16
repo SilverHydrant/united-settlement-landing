@@ -31,6 +31,35 @@ module.exports = function validateInput(req, res, next) {
     }
   }
 
+  // lname: 2-50 chars, letters/spaces/hyphens/apostrophes
+  if (!data.lname || typeof data.lname !== 'string') {
+    errors.push('Last name is required.');
+  } else {
+    data.lname = stripHtml(data.lname);
+    if (data.lname.length < 2 || data.lname.length > 50) {
+      errors.push('Last name must be 2-50 characters.');
+    } else if (!/^[a-zA-Z\s\-']+$/.test(data.lname)) {
+      errors.push('Last name contains invalid characters.');
+    }
+  }
+
+  // dob: YYYY-MM-DD format from <input type="date">, age 18-99
+  if (!data.dob || typeof data.dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.dob)) {
+    errors.push('Date of birth is required.');
+  } else {
+    const dobDate = new Date(data.dob);
+    if (isNaN(dobDate.getTime())) {
+      errors.push('Invalid date of birth.');
+    } else {
+      const ageYears = (Date.now() - dobDate.getTime()) / (365.25 * 24 * 3600 * 1000);
+      if (ageYears < 18) {
+        errors.push('You must be 18 or older.');
+      } else if (ageYears > 99) {
+        errors.push('Invalid date of birth.');
+      }
+    }
+  }
+
   // phone: exactly 10 digits
   if (!data.phone || typeof data.phone !== 'string') {
     errors.push('Phone number is required.');

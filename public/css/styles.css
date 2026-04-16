@@ -506,6 +506,19 @@ a { color: inherit; text-decoration: none; }
 .form-message.success { background: #e8f8f5; color: #1a7a6d; }
 .form-message.error { background: #fdf0ef; color: #c0392b; }
 
+.form-legal-disclaimer {
+  font-size: 11px;
+  color: #777;
+  line-height: 1.55;
+  margin-top: 16px;
+  text-align: left;
+}
+
+.form-legal-disclaimer strong {
+  color: #0b304a;
+  font-weight: 700;
+}
+
 /* ---- Success ---- */
 .success-content {
   text-align: center;
