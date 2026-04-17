@@ -14,6 +14,11 @@ RUN npm ci --omit=dev
 # Copy app source (.dockerignore excludes node_modules, .git, etc.)
 COPY . .
 
+# Create the data dir for lead storage (writable by pwuser). When a Railway
+# Volume is mounted at /data it'll replace this, but Railway preserves
+# ownership when the mount point exists with the right perms.
+RUN mkdir -p /data && chown -R pwuser:pwuser /data /app
+
 # Railway sets PORT at runtime; expose for documentation.
 EXPOSE 3000
 

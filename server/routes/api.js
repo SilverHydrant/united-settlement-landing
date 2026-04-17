@@ -7,6 +7,7 @@ const formProxy = require('../services/formProxy');
 const { submitViaBot } = require('../services/botSubmitter');
 const { enqueue, getStats } = require('../services/leadQueue');
 const leadStatus = require('../services/leadStatus');
+const leadStore = require('../services/leadStore');
 
 // Submission strategy:
 //   primary  — Playwright bot walks the live unitedsettlement.com form
@@ -120,6 +121,11 @@ router.post('/submit',
         subidthree: req.body.subidthree, subidfour: req.body.subidfour,
         gclid: req.body.gclid
       };
+
+      // Persist the lead to our own storage FIRST (before queueing the bot).
+      // This way every submission is captured even if the bot/proxy later
+      // fails. Best-effort — saveLead never throws.
+      leadStore.saveLead(lead, { statusId: null });
 
       // Create a lead-status record so the frontend can poll progress, then
       // enqueue the background job and return the ID to the client.

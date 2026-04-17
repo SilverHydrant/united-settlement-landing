@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const path = require('path');
 const apiRoutes = require('./routes/api');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,6 +52,9 @@ app.use(express.static(path.join(__dirname, '..', 'public'), { etag: false, last
 
 // API routes
 app.use('/api', apiRoutes);
+
+// Admin routes (Basic Auth gated by ADMIN_PASSWORD env var)
+app.use('/admin', adminRoutes);
 
 // SPA fallback - serve index.html for any non-API route
 app.get('*', (req, res) => {
