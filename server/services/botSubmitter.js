@@ -97,8 +97,7 @@ async function getBrowser() {
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',  // Required for Docker on low-memory hosts
-      '--disable-blink-features=AutomationControlled'  // hides webdriver flag
+      '--disable-dev-shm-usage'  // required for Docker on low-memory hosts
     ]
   });
   return _browser;
@@ -117,39 +116,35 @@ process.on('SIGINT', shutdownBrowser);
  * Submit one lead by walking the multi-step form. Returns:
  *   { success: true, durationMs }
  *   { success: false, step, error, durationMs }
+ *
+ * If `onStep` is provided, it's called each time the bot advances so the
+ * caller (api route) can update the lead-status tracker.
  */
-async function submitViaBot(lead) {
+async function submitViaBot(lead, onStep) {
   const startedAt = Date.now();
   let context = null;
   let page = null;
   let currentStep = 'init';
+  const reportStep = (s) => { currentStep = s; if (onStep) { try { onStep(s); } catch (_) {} } };
 
   try {
     const browser = await getBrowser();
     context = await browser.newContext({
       viewport: { width: 1280, height: 800 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      locale: 'en-US',
-      timezoneId: 'America/New_York',
-      ignoreHTTPSErrors: false
-    });
-
-    // Hide common automation fingerprints
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      locale: 'en-US'
+      // No UA override, no init-script fingerprint masking — this is
+      // authorized automation per the operator, so we don't hide what we are.
     });
 
     page = await context.newPage();
 
     // ---- STEP 0: Load the form page ----
-    currentStep = 'load';
+    reportStep('load');
     await page.goto(FORM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await randDelay(800, 1500);
 
     // ---- STEP 1: Debt amount slider + Continue ----
-    currentStep = 'debt-slider';
+    reportStep('debt-slider');
     const debtVal = debtSliderValue(lead.lamount);
     // The slider input is type=range with name=lamount. Set it directly and dispatch input event.
     await page.evaluate((v) => {
@@ -166,7 +161,7 @@ async function submitViaBot(lead) {
     await randDelay(700, 1300);
 
     // ---- STEP 2: First Name + Last Name ----
-    currentStep = 'name';
+    reportStep('name');
     await fillVisible(page, 'input[name="fname"]', lead.fname);
     await randDelay(300, 700);
     await fillVisible(page, 'input[name="lname"]', lead.lname);
@@ -175,7 +170,7 @@ async function submitViaBot(lead) {
     await randDelay(700, 1300);
 
     // ---- STEP 3: Email + Phone + State ----
-    currentStep = 'contact';
+    reportStep('contact');
     await fillVisible(page, 'input[name="email"]', lead.email);
     await randDelay(300, 700);
     await fillVisible(page, 'input[name="phone"]', lead.phone);
@@ -186,7 +181,7 @@ async function submitViaBot(lead) {
     await randDelay(700, 1300);
 
     // ---- STEP 4: Address ----
-    currentStep = 'address';
+    reportStep('address');
     const addr = randomAddress(lead.state);
     await fillVisible(page, 'input[name="address"]', addr.address);
     await randDelay(300, 700);
@@ -198,7 +193,7 @@ async function submitViaBot(lead) {
     await randDelay(700, 1300);
 
     // ---- STEP 5: Date of Birth ----
-    currentStep = 'dob';
+    reportStep('dob');
     const dob = dobToMMDDYYYY(lead.dob);
     await fillVisible(page, 'input[name="dob"]', dob);
     await randDelay(400, 900);
@@ -206,12 +201,12 @@ async function submitViaBot(lead) {
     await randDelay(700, 1300);
 
     // ---- STEP 6: SSN + Get Started (final submit) ----
-    currentStep = 'ssn';
+    reportStep('ssn');
     await fillVisible(page, 'input[name="ssn"]', '000000000');
     await randDelay(400, 900);
 
     // Click Get Started — submits the whole form to their PHP handler
-    currentStep = 'submit';
+    reportStep('submit');
     const [navResponse] = await Promise.all([
       // Wait for either a navigation OR an XHR to the submission endpoint, whichever happens first
       Promise.race([

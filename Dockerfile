@@ -1,6 +1,8 @@
 # Use Playwright's official image - has Chromium, Node, all OS deps preinstalled.
-# Pin the version so the npm playwright dep matches the bundled browser binary.
-FROM mcr.microsoft.com/playwright:v1.50.0-jammy
+# IMPORTANT: The image tag MUST match the playwright npm version in package.json,
+# otherwise the installed browser binary won't match the version the JS library
+# looks for. If you bump `playwright` in package.json, bump this tag too.
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy
 
 WORKDIR /app
 

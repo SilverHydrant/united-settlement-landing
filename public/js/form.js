@@ -173,6 +173,11 @@
           document.getElementById('successMessage').textContent =
             'A debt relief specialist will call you shortly.';
 
+          // Start live status polling if we got a leadId back
+          if (data.leadId) {
+            startLeadStatusPolling(data.leadId);
+          }
+
           // Scroll to success
           document.getElementById('successSection').scrollIntoView({ behavior: 'smooth' });
         } else {
@@ -185,6 +190,95 @@
         showMessage('Connection error. Please try again or call us at (516) 231-9239.', 'error');
       });
     });
+  }
+
+  // ----- Lead status polling -----
+  // Poll /api/lead-status/:id every ~1.5s and update the progress UI until
+  // the bot reaches 'submitted' or 'failed' (or we hit the max attempts).
+  var STEP_ORDER = ['queued', 'load', 'debt-slider', 'name', 'contact', 'address', 'dob', 'ssn', 'submit'];
+  var STEP_LABELS = {
+    queued:       'Queued',
+    load:         'Opening the form\u2026',
+    'debt-slider':'Entering debt amount\u2026',
+    name:         'Entering your name\u2026',
+    contact:      'Entering contact info\u2026',
+    address:      'Entering address\u2026',
+    dob:          'Entering date of birth\u2026',
+    ssn:          'Final info\u2026',
+    submit:       'Submitting to United Settlement\u2026'
+  };
+
+  function updateProgressUI(rec) {
+    var wrap = document.getElementById('leadProgress');
+    var label = document.getElementById('leadProgressLabel');
+    var spinner = document.getElementById('leadProgressSpinner');
+    if (!wrap) return;
+    wrap.style.display = 'block';
+
+    // Figure out the current step — fall back to 'queued' if none set yet
+    var curr = rec.step || 'queued';
+    var currIdx = STEP_ORDER.indexOf(curr);
+
+    // Mark steps as done (before current), active (at current), or pending (after)
+    var steps = document.querySelectorAll('.lead-progress-step');
+    steps.forEach(function(el) {
+      var s = el.getAttribute('data-step');
+      var idx = STEP_ORDER.indexOf(s);
+      el.classList.remove('done', 'active', 'failed');
+      if (rec.state === 'submitted' || s === 'submit' && rec.state === 'submitted') {
+        if (idx <= STEP_ORDER.length) el.classList.add('done');
+      } else if (rec.state === 'failed') {
+        if (idx < currIdx) el.classList.add('done');
+        else if (idx === currIdx) el.classList.add('failed');
+      } else if (idx < currIdx) {
+        el.classList.add('done');
+      } else if (idx === currIdx) {
+        el.classList.add('active');
+      }
+    });
+
+    if (rec.state === 'submitted') {
+      // Mark all steps done
+      steps.forEach(function(el) {
+        el.classList.remove('active', 'failed');
+        el.classList.add('done');
+      });
+      label.textContent = rec.method === 'proxy'
+        ? 'Lead delivered to United Settlement.'
+        : 'Submitted successfully to United Settlement.';
+      spinner.classList.add('done');
+    } else if (rec.state === 'failed') {
+      label.textContent = 'Could not deliver to United Settlement. A rep will still call you shortly.';
+      spinner.classList.add('failed');
+    } else {
+      label.textContent = STEP_LABELS[curr] || 'Working\u2026';
+    }
+  }
+
+  function startLeadStatusPolling(leadId) {
+    var attempts = 0;
+    var maxAttempts = 40; // ~60 seconds at 1.5s interval
+    var intervalId = null;
+
+    function tick() {
+      attempts++;
+      fetch('/api/lead-status/' + encodeURIComponent(leadId))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data.success || !data.lead) return;
+          updateProgressUI(data.lead);
+          if (data.lead.state === 'submitted' || data.lead.state === 'failed' || attempts >= maxAttempts) {
+            clearInterval(intervalId);
+          }
+        })
+        .catch(function() { /* transient, keep polling */ });
+    }
+
+    // Show initial "queued" state right away
+    updateProgressUI({ state: 'queued', step: 'queued' });
+    // Then poll
+    tick();
+    intervalId = setInterval(tick, 1500);
   }
 
   function showMessage(text, type) {
