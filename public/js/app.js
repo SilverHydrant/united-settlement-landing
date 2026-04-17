@@ -5,9 +5,9 @@
 (function() {
   'use strict';
 
-  // Initialize Meta Pixel (replace with your actual Pixel ID)
+  // Initialize Meta Pixel
   if (window.Pixel) {
-    window.Pixel.init('YOUR_PIXEL_ID_HERE');
+    window.Pixel.init('2221485628258289');
   }
 
   // --- CTA Button Handlers ---
@@ -75,11 +75,20 @@
   document.querySelectorAll('.how-next-btn[data-next]').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.preventDefault();
+      var nextPanel = btn.getAttribute('data-next');
+      // Fire pixel event — user is progressing through the How-It-Works flow.
+      // Each next-phase click is a meaningful engagement signal for retargeting.
+      if (window.Pixel) {
+        window.Pixel.fire('TabProgress', {
+          content_name: 'how_it_works_' + nextPanel,
+          content_category: 'tab_progress'
+        });
+      }
       // Anchor scroll to the tabs bar so the panel swap doesn't yank
       // the user up or down when the new panel has a different height
       var tabsBar = document.querySelector('.how-tabs');
       var prevTop = tabsBar ? tabsBar.getBoundingClientRect().top : 0;
-      activateHowPanel(btn.getAttribute('data-next'));
+      activateHowPanel(nextPanel);
       if (tabsBar) {
         var newTop = tabsBar.getBoundingClientRect().top;
         var delta = newTop - prevTop;
@@ -90,6 +99,32 @@
       }
     });
   });
+
+  // Header logo click — tracks outbound click to unitedsettlement.com
+  var headerLogo = document.querySelector('a.logo');
+  if (headerLogo) {
+    headerLogo.addEventListener('click', function() {
+      if (window.Pixel) {
+        window.Pixel.fire('ViewContent', {
+          content_name: 'logo_click',
+          content_category: 'outbound_click'
+        });
+      }
+    });
+  }
+
+  // Footer logo click — same event, different placement
+  var footerLogo = document.querySelector('.footer-logo');
+  if (footerLogo) {
+    footerLogo.addEventListener('click', function() {
+      if (window.Pixel) {
+        window.Pixel.fire('ViewContent', {
+          content_name: 'footer_logo_click',
+          content_category: 'outbound_click'
+        });
+      }
+    });
+  }
 
   // Accordion toggle
   document.querySelectorAll('.accordion-btn').forEach(function(btn) {
