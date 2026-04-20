@@ -82,11 +82,11 @@ module.exports = function validateInput(req, res, next) {
 
   // calltime: valid option or "pick:YYYY-MM-DD HH:MM"
   if (data.calltime && typeof data.calltime === 'string' && data.calltime.startsWith('pick:')) {
-    // Validate the picked time is between 9am-7pm
+    // Validate the picked time is between 9am-9pm Eastern (call center hours)
     var timePart = data.calltime.split(' ')[1] || '';
     var hour = parseInt(timePart.split(':')[0], 10);
-    if (isNaN(hour) || hour < 9 || hour >= 19) {
-      errors.push('Please pick a time between 9:00 AM and 7:00 PM.');
+    if (isNaN(hour) || hour < 9 || hour >= 21) {
+      errors.push('Please pick a time between 9:00 AM and 9:00 PM Eastern.');
     }
   } else if (!data.calltime || !['now', '1hour', '2hours', 'tomorrow', 'morning', 'afternoon', 'evening', 'asap'].includes(data.calltime)) {
     data.calltime = 'now';

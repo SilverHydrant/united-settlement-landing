@@ -200,11 +200,11 @@
   }
 
   // ============================================================
-  // Eastern-time helpers (call center hours are 9am–7pm ET)
+  // Eastern-time helpers (call center hours are 9am–9pm ET, 7 days)
   // Using Intl so we don't depend on the user's device clock or tz setting.
   // ============================================================
-  var BUSINESS_OPEN_ET = 9;   // inclusive
-  var BUSINESS_CLOSE_ET = 19; // exclusive (7pm)
+  var BUSINESS_OPEN_ET = 9;   // inclusive (9am)
+  var BUSINESS_CLOSE_ET = 21; // exclusive (9pm)
 
   function getETHourAtOffset(offsetMinutes) {
     var t = new Date(Date.now() + (offsetMinutes || 0) * 60 * 1000);
@@ -231,7 +231,7 @@
 
   // ============================================================
   // Business-hours notice — shows inline when user picks a calltime
-  // that falls outside 9am-7pm ET.
+  // that falls outside 9am-9pm ET.
   // ============================================================
   var noticeEl = document.getElementById('calltimeNotice');
 
@@ -261,7 +261,7 @@
       return;
     }
     showNotice(
-      'Heads up: our specialists are available <strong>9am\u20137pm Eastern</strong>. ' +
+      'Heads up: our specialists are available <strong>9am\u20139pm Eastern</strong>. ' +
       (etHour >= BUSINESS_CLOSE_ET ? 'We\u2019re closed for the evening.' : 'We open at 9am ET.') +
       ' Your lead will go through, and <strong>we\u2019ll call you tomorrow morning instead</strong>. ' +
       'Or tap <strong>&ldquo;Tomorrow&rdquo;</strong> above.'
@@ -333,7 +333,7 @@
       return 'A specialist will call you <strong>tomorrow afternoon</strong> (12pm\u20135pm Eastern).';
     }
     if (calltime === 'evening') {
-      return 'A specialist will call you <strong>tomorrow evening</strong> (5pm\u20137pm Eastern).';
+      return 'A specialist will call you <strong>tomorrow evening</strong> (5pm\u20139pm Eastern).';
     }
     if (calltime.indexOf('pick:') === 0) {
       // Format: pick:YYYY-MM-DD HH:MM  (user treats this as ET per the label)
@@ -460,13 +460,13 @@
     });
   });
 
-  // Validate picked time: only 9am-7pm
+  // Validate picked time: only 9am-9pm
   function validatePickedTime() {
     if (!pickTime || !pickDate) return true;
 
     var hour = parseInt(pickTime.value.split(':')[0], 10);
-    if (hour < 9 || hour >= 19) {
-      if (picktimeError) picktimeError.textContent = 'Please pick a time between 9:00 AM and 7:00 PM.';
+    if (hour < 9 || hour >= 21) {
+      if (picktimeError) picktimeError.textContent = 'Please pick a time between 9:00 AM and 9:00 PM Eastern.';
       return false;
     }
     if (picktimeError) picktimeError.textContent = '';
