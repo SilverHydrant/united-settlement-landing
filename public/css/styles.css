@@ -1385,21 +1385,38 @@ a { color: inherit; text-decoration: none; }
   }
 
   /* Tab how-it-works on mobile: scrollable tabs, stacked steps */
+  /* Mobile: 2x2 grid — all four phases visible at once, no horizontal scroll.
+     Each cell is 50% wide and tall enough to hold the active-state underline
+     cleanly. Text wraps within a cell if the label is too long for one line. */
   .how-tabs {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .how-tabs::-webkit-scrollbar {
-    display: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow-x: visible;
   }
 
   .how-tab {
-    flex: 0 0 auto;
-    padding: 16px 14px 14px;
+    flex: none;
+    padding: 14px 10px 12px;
     font-size: 13px;
-    white-space: nowrap;
+    line-height: 1.25;
+    white-space: normal;
+    border-right: 1px solid #eef2f4;
+    border-bottom: 1px solid #eef2f4;
+    min-height: 52px;
+  }
+
+  /* Kill the grid-cell borders on the right column / bottom row to
+     avoid doubled lines at the container edge. */
+  .how-tab:nth-child(2n) { border-right: none; }
+  .how-tab:nth-child(n+3) { border-bottom: none; }
+
+  /* Tighten the active underline on mobile so it doesn't awkwardly span
+     the gap between two stacked cells. */
+  .how-tab.active::after {
+    left: 15%;
+    right: 15%;
+    bottom: 0;
+    height: 2.5px;
   }
 
   .how-panels {
