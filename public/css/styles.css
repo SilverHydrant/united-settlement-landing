@@ -1385,36 +1385,40 @@ a { color: inherit; text-decoration: none; }
   }
 
   /* Tab how-it-works on mobile: scrollable tabs, stacked steps */
-  /* Mobile: 2x2 grid — all four phases visible at once, no horizontal scroll.
-     Each cell is 50% wide and tall enough to hold the active-state underline
-     cleanly. Text wraps within a cell if the label is too long for one line. */
+  /* Mobile: one horizontal row of four, so the left-to-right reading
+     order matches the actual journey (Begin → Negotiations → Pay Off →
+     Freedom). Labels wrap to a second line inside their cell when needed
+     — "Pay Off Settlements" becomes two lines, same for "Financial
+     Freedom" — rather than overflowing or requiring a horizontal swipe. */
   .how-tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(4, 1fr);
     overflow-x: visible;
   }
 
   .how-tab {
     flex: none;
-    padding: 14px 10px 12px;
-    font-size: 13px;
+    padding: 12px 6px 11px;
+    font-size: 11.5px;
     line-height: 1.25;
     white-space: normal;
-    border-right: 1px solid #eef2f4;
-    border-bottom: 1px solid #eef2f4;
+    word-break: break-word;
+    hyphens: auto;
     min-height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  /* Kill the grid-cell borders on the right column / bottom row to
-     avoid doubled lines at the container edge. */
-  .how-tab:nth-child(2n) { border-right: none; }
-  .how-tab:nth-child(n+3) { border-bottom: none; }
+  /* Subtle vertical divider between cells, but not after the last one */
+  .how-tab + .how-tab {
+    border-left: 1px solid #eef2f4;
+  }
 
-  /* Tighten the active underline on mobile so it doesn't awkwardly span
-     the gap between two stacked cells. */
+  /* Active underline scaled to the narrower cell width */
   .how-tab.active::after {
-    left: 15%;
-    right: 15%;
+    left: 10%;
+    right: 10%;
     bottom: 0;
     height: 2.5px;
   }
