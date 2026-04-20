@@ -57,14 +57,15 @@ a { color: inherit; text-decoration: none; }
 .header-phone {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 18px;
+  gap: 8px;
+  padding: 7px 18px;
   border: 2px solid #19a4ac;
   border-radius: 4px;
   color: #0b304a;
   font-weight: 700;
   font-size: 15px;
   transition: all 0.2s;
+  line-height: 1.15;
 }
 
 .header-phone svg {
@@ -72,12 +73,41 @@ a { color: inherit; text-decoration: none; }
   flex-shrink: 0;
 }
 
+/* Wraps the number + optional "Call anytime" subtitle as a two-line stack.
+   When the subtitle is hidden (outside business hours) the stack collapses
+   to just the single-line number — pill looks identical to before. */
+.header-phone-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.header-phone-number {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.header-phone-status {
+  font-size: 10px;
+  font-weight: 700;
+  color: #19a4ac;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.header-phone-status[hidden] {
+  display: none;
+}
+
 .header-phone:hover {
   background: #19a4ac;
   color: #ffffff;
 }
 
-.header-phone:hover svg {
+.header-phone:hover svg,
+.header-phone:hover .header-phone-status {
   color: #ffffff;
 }
 
@@ -1451,8 +1481,10 @@ a { color: inherit; text-decoration: none; }
     height: 24px;
   }
 
-  .header-phone span {
-    display: inline;
+  /* Keep the two-line stack (number + "Call anytime") as inline-flex
+     on mobile so the subtitle sits directly under the number. */
+  .header-phone-stack {
+    display: inline-flex;
   }
 }
 
