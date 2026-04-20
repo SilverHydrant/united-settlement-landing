@@ -166,16 +166,23 @@
             window.Pixel.leadSubmitted(formData.lamount * 1000);
           }
 
-          // Show success section
+          // Swap form → success section. Start in the "processing" state; the
+          // poller will flip to the "final" state once the bot reports back.
           document.getElementById('formSection').style.display = 'none';
           document.getElementById('successSection').style.display = 'block';
+          document.getElementById('successProcessing').style.display = 'block';
+          document.getElementById('successFinal').style.display = 'none';
 
-          document.getElementById('successMessage').textContent =
-            'A debt relief specialist will call you shortly.';
+          // Remember the submitted call-time — we'll use it to pick the final
+          // copy ("in 1 hour" / "tomorrow morning" / etc.) once the bot is done.
+          window._submittedCalltime = formData.calltime;
 
           // Start live status polling if we got a leadId back
           if (data.leadId) {
             startLeadStatusPolling(data.leadId);
+          } else {
+            // No leadId (old backend?) — skip straight to the final state
+            transitionToFinalState(formData.calltime, 'submitted');
           }
 
           // Scroll to success
@@ -192,41 +199,100 @@
     });
   }
 
-  // ----- Lead status polling -----
-  // Poll /api/lead-status/:id every ~1.5s and update the progress UI until
-  // the bot reaches 'submitted' or 'failed' (or we hit the max attempts).
+  // ============================================================
+  // Eastern-time helpers (call center hours are 9am–7pm ET)
+  // Using Intl so we don't depend on the user's device clock or tz setting.
+  // ============================================================
+  var BUSINESS_OPEN_ET = 9;   // inclusive
+  var BUSINESS_CLOSE_ET = 19; // exclusive (7pm)
+
+  function getETHourAtOffset(offsetMinutes) {
+    var t = new Date(Date.now() + (offsetMinutes || 0) * 60 * 1000);
+    var parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric',
+      hour12: false
+    }).formatToParts(t);
+    var h = parts.find(function(p) { return p.type === 'hour'; });
+    return h ? parseInt(h.value, 10) % 24 : 12;
+  }
+
+  function withinBusinessHours(etHour) {
+    return etHour >= BUSINESS_OPEN_ET && etHour < BUSINESS_CLOSE_ET;
+  }
+
+  // Minutes from "now" until the call based on the chosen option
+  function minutesFromNowForValue(v) {
+    if (v === 'now') return 0;
+    if (v === '1hour') return 60;
+    if (v === '2hours') return 120;
+    return null; // tomorrow / picktime / morning / etc — not a direct offset
+  }
+
+  // ============================================================
+  // Business-hours notice — shows inline when user picks a calltime
+  // that falls outside 9am-7pm ET.
+  // ============================================================
+  var noticeEl = document.getElementById('calltimeNotice');
+
+  function showNotice(html) {
+    if (!noticeEl) return;
+    noticeEl.innerHTML = html;
+    noticeEl.style.display = 'block';
+  }
+  function hideNotice() {
+    if (noticeEl) noticeEl.style.display = 'none';
+  }
+
+  function validateCalltimeChoice(value) {
+    if (!value || value === 'tomorrow' || value === 'morning' || value === 'afternoon' || value === 'evening') {
+      hideNotice();
+      return;
+    }
+    if (value === 'picktime') {
+      // pick-time has its own validator (9-19 on the picked time)
+      return;
+    }
+    var offset = minutesFromNowForValue(value);
+    if (offset === null) { hideNotice(); return; }
+    var etHour = getETHourAtOffset(offset);
+    if (withinBusinessHours(etHour)) {
+      hideNotice();
+      return;
+    }
+    showNotice(
+      'Heads up: our specialists are available <strong>9am\u20137pm Eastern</strong>. ' +
+      (etHour >= BUSINESS_CLOSE_ET ? 'We\u2019re closed for the evening.' : 'We open at 9am ET.') +
+      ' Your lead will go through, and <strong>we\u2019ll call you tomorrow morning instead</strong>. ' +
+      'Or tap <strong>&ldquo;Tomorrow&rdquo;</strong> above.'
+    );
+  }
+
+  // Run validation whenever the user picks a different call-time
+  document.querySelectorAll('.calltime-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var v = btn.getAttribute('data-value');
+      // Let the existing handler populate #calltime first; validate after
+      setTimeout(function() { validateCalltimeChoice(v); }, 0);
+    });
+  });
+  // On initial load, validate the default ("now")
+  setTimeout(function() { validateCalltimeChoice('now'); }, 0);
+
+  // ============================================================
+  // Lead status polling — drives the progress card and the final swap
+  // ============================================================
   var STEP_ORDER = ['queued', 'load', 'debt-slider', 'name', 'contact', 'address', 'dob', 'ssn', 'submit'];
-  var STEP_LABELS = {
-    queued:       'Queued',
-    load:         'Opening the form\u2026',
-    'debt-slider':'Entering debt amount\u2026',
-    name:         'Entering your name\u2026',
-    contact:      'Entering contact info\u2026',
-    address:      'Entering address\u2026',
-    dob:          'Entering date of birth\u2026',
-    ssn:          'Final info\u2026',
-    submit:       'Submitting to United Settlement\u2026'
-  };
 
   function updateProgressUI(rec) {
-    var wrap = document.getElementById('leadProgress');
-    var label = document.getElementById('leadProgressLabel');
-    var spinner = document.getElementById('leadProgressSpinner');
-    if (!wrap) return;
-    wrap.style.display = 'block';
-
-    // Figure out the current step — fall back to 'queued' if none set yet
     var curr = rec.step || 'queued';
     var currIdx = STEP_ORDER.indexOf(curr);
-
-    // Mark steps as done (before current), active (at current), or pending (after)
     var steps = document.querySelectorAll('.lead-progress-step');
     steps.forEach(function(el) {
-      var s = el.getAttribute('data-step');
-      var idx = STEP_ORDER.indexOf(s);
+      var idx = STEP_ORDER.indexOf(el.getAttribute('data-step'));
       el.classList.remove('done', 'active', 'failed');
-      if (rec.state === 'submitted' || s === 'submit' && rec.state === 'submitted') {
-        if (idx <= STEP_ORDER.length) el.classList.add('done');
+      if (rec.state === 'submitted') {
+        el.classList.add('done');
       } else if (rec.state === 'failed') {
         if (idx < currIdx) el.classList.add('done');
         else if (idx === currIdx) el.classList.add('failed');
@@ -236,29 +302,94 @@
         el.classList.add('active');
       }
     });
+  }
 
-    if (rec.state === 'submitted') {
-      // Mark all steps done
-      steps.forEach(function(el) {
-        el.classList.remove('active', 'failed');
-        el.classList.add('done');
-      });
-      label.textContent = rec.method === 'proxy'
-        ? 'Lead delivered to United Settlement.'
-        : 'Submitted successfully to United Settlement.';
-      spinner.classList.add('done');
-    } else if (rec.state === 'failed') {
-      label.textContent = 'Could not deliver to United Settlement. A rep will still call you shortly.';
-      spinner.classList.add('failed');
+  // Build the dynamic "a specialist will call you…" line based on the
+  // call-time the user picked. Accounts for business hours — e.g. "now" at
+  // 11pm ET becomes "first thing tomorrow morning at 9am ET".
+  function buildCallCopy(calltime) {
+    var ET_HOUR = getETHourAtOffset(0);
+
+    function tomorrowMorning() {
+      return 'A specialist will call you <strong>tomorrow morning at 9am Eastern</strong>.';
+    }
+
+    if (!calltime || calltime === 'now') {
+      if (!withinBusinessHours(ET_HOUR)) return tomorrowMorning();
+      return 'A specialist will call you <strong>within the next few minutes</strong>.';
+    }
+    if (calltime === '1hour') {
+      if (!withinBusinessHours(getETHourAtOffset(60))) return tomorrowMorning();
+      return 'A specialist will call you <strong>in about 1 hour</strong>.';
+    }
+    if (calltime === '2hours') {
+      if (!withinBusinessHours(getETHourAtOffset(120))) return tomorrowMorning();
+      return 'A specialist will call you <strong>in about 2 hours</strong>.';
+    }
+    if (calltime === 'tomorrow' || calltime === 'morning') {
+      return 'A specialist will call you <strong>tomorrow morning</strong> (9am\u201312pm Eastern).';
+    }
+    if (calltime === 'afternoon') {
+      return 'A specialist will call you <strong>tomorrow afternoon</strong> (12pm\u20135pm Eastern).';
+    }
+    if (calltime === 'evening') {
+      return 'A specialist will call you <strong>tomorrow evening</strong> (5pm\u20137pm Eastern).';
+    }
+    if (calltime.indexOf('pick:') === 0) {
+      // Format: pick:YYYY-MM-DD HH:MM  (user treats this as ET per the label)
+      var dt = calltime.slice(5).split(' ');
+      var datePart = dt[0], timePart = dt[1] || '';
+      var dateStr = '', timeStr = '';
+      try {
+        var d = new Date(datePart + 'T00:00:00');
+        dateStr = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      } catch (_) { dateStr = datePart; }
+      if (timePart) {
+        var hm = timePart.split(':');
+        var hh = parseInt(hm[0], 10);
+        var mm = hm[1] || '00';
+        var ampm = hh >= 12 ? 'pm' : 'am';
+        var h12 = ((hh + 11) % 12) + 1;
+        timeStr = h12 + ':' + mm + ' ' + ampm;
+      }
+      return 'A specialist will call you on <strong>' + dateStr + ' at ' + timeStr + ' Eastern</strong>.';
+    }
+    return 'A specialist will reach out shortly.';
+  }
+
+  function transitionToFinalState(calltime, state) {
+    var processing = document.getElementById('successProcessing');
+    var finalCard  = document.getElementById('successFinal');
+    var headline   = document.getElementById('successHeadline');
+    var message    = document.getElementById('successMessage');
+    if (processing) processing.style.display = 'none';
+    if (finalCard)  finalCard.style.display = 'block';
+
+    if (state === 'failed') {
+      // Bot + proxy fallback both failed — very rare. Give the user a clear
+      // "call us" path rather than promising a callback we can't guarantee.
+      if (headline) headline.innerHTML = 'Thanks \u2014 we got your info.';
+      if (message) message.innerHTML =
+        'We hit a temporary snag auto-submitting your request. ' +
+        'Please call us at <strong>(516) 231-9239</strong> and a specialist will help you right now.';
     } else {
-      label.textContent = STEP_LABELS[curr] || 'Working\u2026';
+      if (headline) headline.innerHTML = 'Congratulations \u2014 your request is in!';
+      if (message) message.innerHTML = buildCallCopy(calltime);
     }
   }
 
   function startLeadStatusPolling(leadId) {
     var attempts = 0;
-    var maxAttempts = 40; // ~60 seconds at 1.5s interval
+    var maxAttempts = 40; // ~60s at 1.5s
     var intervalId = null;
+    var finalized = false;
+
+    function finalize(state) {
+      if (finalized) return;
+      finalized = true;
+      clearInterval(intervalId);
+      transitionToFinalState(window._submittedCalltime, state);
+    }
 
     function tick() {
       attempts++;
@@ -267,18 +398,21 @@
         .then(function(data) {
           if (!data.success || !data.lead) return;
           updateProgressUI(data.lead);
-          if (data.lead.state === 'submitted' || data.lead.state === 'failed' || attempts >= maxAttempts) {
-            clearInterval(intervalId);
-          }
+          if (data.lead.state === 'submitted') finalize('submitted');
+          else if (data.lead.state === 'failed') finalize('failed');
+          else if (attempts >= maxAttempts) finalize('submitted'); // optimistic on timeout
         })
         .catch(function() { /* transient, keep polling */ });
     }
 
-    // Show initial "queued" state right away
+    // Show initial "queued" state immediately so the user sees motion
     updateProgressUI({ state: 'queued', step: 'queued' });
-    // Then poll
     tick();
     intervalId = setInterval(tick, 1500);
+
+    // Safety net: if polling never finalizes (network flake), still show the
+    // final state after the max window so the user isn't stuck watching a spinner.
+    setTimeout(function() { finalize('submitted'); }, (maxAttempts * 1500) + 1000);
   }
 
   function showMessage(text, type) {
