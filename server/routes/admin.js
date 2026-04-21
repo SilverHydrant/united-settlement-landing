@@ -84,6 +84,50 @@ function renderStatusPill(statusKey) {
   return `<span class="pill" style="background:${s.bg};color:${s.color}">${htmlEscape(s.label)}</span>`;
 }
 
+// Bucket a lead into one of the filter chips based on its callback preference.
+// Anything starting with "pick:" collapses into the generic "scheduled" bucket.
+function callbackBucket(calltime) {
+  if (!calltime) return 'unknown';
+  if (calltime.indexOf('pick:') === 0) return 'picktime';
+  if (['now','1hour','2hours','tomorrow'].indexOf(calltime) >= 0) return calltime;
+  if (['morning','afternoon','evening','asap'].indexOf(calltime) >= 0) return 'tomorrow';
+  return 'unknown';
+}
+
+// Render the "call schedule" filter chips. Clicking a chip filters the table
+// rows to just that callback group; clicking "All" resets.
+function renderCallbackFilter(leads) {
+  const counts = { all: leads.length, now: 0, '1hour': 0, '2hours': 0, tomorrow: 0, picktime: 0 };
+  for (const l of leads) {
+    const b = callbackBucket(l.calltime);
+    if (counts[b] !== undefined) counts[b]++;
+  }
+  // Each chip: data-filter matches the value stamped on row.data-calltime so
+  // the client-side filter is a simple attribute match.
+  const chips = [
+    { key: '',         icon: '',    label: 'All',       n: counts.all },
+    { key: 'now',      icon: '📞',  label: 'Now',       n: counts.now },
+    { key: '1hour',    icon: '⏰',  label: '1 Hour',    n: counts['1hour'] },
+    { key: '2hours',   icon: '⏰',  label: '2 Hours',   n: counts['2hours'] },
+    { key: 'tomorrow', icon: '🌅',  label: 'Tomorrow',  n: counts.tomorrow },
+    { key: 'picktime', icon: '📅',  label: 'Scheduled', n: counts.picktime }
+  ];
+  return `
+    <div class="callback-filter" role="tablist">
+      <div class="cb-title">Callback schedule</div>
+      <div class="cb-chips">
+        ${chips.map((c, i) => `
+          <button class="cb-chip${i === 0 ? ' active' : ''}" data-filter="${c.key}" type="button">
+            ${c.icon ? `<span class="cb-chip-icon">${c.icon}</span>` : ''}
+            <span class="cb-chip-label">${c.label}</span>
+            <span class="cb-chip-count">${c.n}</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function computeSummary(leads, deliveriesByLeadId) {
   const summary = {
     total: leads.length,
@@ -169,8 +213,9 @@ function renderLeadsHtml(leads, queueStats) {
     if (method && method !== 'none') deliveryMeta.push(method);
     if (durationMs) deliveryMeta.push((durationMs / 1000).toFixed(1) + 's');
     if (d && d.error) deliveryMeta.push(htmlEscape(String(d.error).slice(0, 60)));
+    const bucket = callbackBucket(l.calltime);
     return `
-    <tr>
+    <tr data-calltime="${htmlEscape(bucket)}">
       <td>${newest.length - i}</td>
       <td class="muted">${htmlEscape(fmtTime(l.savedAt))}</td>
       <td>${renderStatusPill(statusKey)}${deliveryMeta.length ? `<div class="delivery-meta">${deliveryMeta.map(htmlEscape).join(' · ')}</div>` : ''}</td>
@@ -219,6 +264,15 @@ function renderLeadsHtml(leads, queueStats) {
     td a:hover{text-decoration:underline}
     .muted{color:#8a95a0}
     .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+    .callback-filter{background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+    .cb-title{font-size:10px;font-weight:800;color:#7a848c;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+    .cb-chips{display:flex;flex-wrap:wrap;gap:6px}
+    .cb-chip{display:inline-flex;align-items:center;gap:6px;background:#f4f6f8;border:1px solid #e1e7ec;color:#4a5863;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
+    .cb-chip:hover{background:#eaf0f4;color:#0b304a}
+    .cb-chip.active{background:#0b304a;color:#fff;border-color:#0b304a}
+    .cb-chip.active .cb-chip-count{background:rgba(255,255,255,.2);color:#fff}
+    .cb-chip-icon{font-size:13px;line-height:1}
+    .cb-chip-count{display:inline-block;background:#fff;color:#0b304a;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:800;min-width:18px;text-align:center}
     .delivery-meta{font-size:10px;color:#8a95a0;margin-top:4px}
     .empty{padding:60px;text-align:center;color:#8a95a0;background:#fff;border-radius:8px}
     .search{margin-bottom:12px;padding:10px 14px;border:1px solid #d8dde3;border-radius:6px;width:100%;font-size:14px;background:#fff}
@@ -243,6 +297,7 @@ function renderLeadsHtml(leads, queueStats) {
   ${leads.length === 0 ? `
     <div class="empty">No leads yet. Submit one on the public site to see it appear here.</div>
   ` : `
+    ${renderCallbackFilter(leads)}
     <input class="search" id="q" placeholder="Search name, email, phone, state, status…" oninput="filter()">
     <table id="tbl">
       <thead><tr>
@@ -253,12 +308,26 @@ function renderLeadsHtml(leads, queueStats) {
   `}
 </div>
 <script>
-function filter(){
-  var q=(document.getElementById('q').value||'').toLowerCase();
+// Current filter state, composed from: (a) callback-time chip and
+// (b) free-text search box. A row is visible only when it passes both.
+var activeChip = '';
+function applyFilters(){
+  var q = (document.getElementById('q').value || '').toLowerCase();
   document.querySelectorAll('#tbl tbody tr').forEach(function(r){
-    r.style.display = r.innerText.toLowerCase().indexOf(q)>=0 ? '' : 'none';
+    var chipMatch = !activeChip || r.getAttribute('data-calltime') === activeChip;
+    var textMatch = !q || r.innerText.toLowerCase().indexOf(q) >= 0;
+    r.style.display = (chipMatch && textMatch) ? '' : 'none';
   });
 }
+function filter(){ applyFilters(); }  // existing search uses this name
+document.querySelectorAll('.cb-chip').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    document.querySelectorAll('.cb-chip').forEach(function(b){ b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeChip = btn.getAttribute('data-filter') || '';
+    applyFilters();
+  });
+});
 </script>
 </body></html>`;
 }
