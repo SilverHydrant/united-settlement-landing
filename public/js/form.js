@@ -174,6 +174,15 @@
           return;
         }
 
+        // Any non-overload failure also flips to the friendly call-us screen
+        // instead of a red banner — when the backend is unhappy for ANY
+        // reason we'd rather push the user to pick up the phone than have
+        // them retry in frustration. Overload already handled above.
+        if (!data.success && r.status !== 503) {
+          showFriendlyFailure(data.message);
+          return;
+        }
+
         if (data.success) {
           // Fire pixel event
           if (window.Pixel) {
@@ -210,6 +219,8 @@
       .catch(function() {
         btnSubmit.disabled = false;
         btnSubmit.classList.remove('loading');
+        // Network error — same friendly fallback, no red banner
+        showFriendlyFailure('Connection issue reaching our server. Please call us at (516) 231-9239 and a specialist will take your info right now.');
         showMessage('Connection error. Please try again or call us at (516) 231-9239.', 'error');
       });
     });
@@ -429,6 +440,36 @@
     // Safety net: if polling never finalizes (network flake), still show the
     // final state after the max window so the user isn't stuck watching a spinner.
     setTimeout(function() { finalize('submitted'); }, (maxAttempts * 1500) + 1000);
+  }
+
+  // Any failure that ISN'T the queue-is-full case (which has its own dedicated
+   // message) swaps to the overload card too — same friendly "call us" vibe,
+   // with the specific error inlined below the main call-to-action so the user
+   // knows what happened without being yelled at.
+  function showFriendlyFailure(detailMsg) {
+    var overload = document.getElementById('successOverload');
+    var processing = document.getElementById('successProcessing');
+    var finalCard = document.getElementById('successFinal');
+    var section = document.getElementById('successSection');
+    if (!overload || !section) return;
+    document.getElementById('formSection').style.display = 'none';
+    section.style.display = 'block';
+    if (processing) processing.style.display = 'none';
+    if (finalCard) finalCard.style.display = 'none';
+    overload.style.display = 'block';
+    // Update the heading copy for a non-overload failure so it reads accurately.
+    var headline = overload.querySelector('h2');
+    var lead = overload.querySelector('.success-lead');
+    if (headline) headline.innerHTML = 'Sorry &mdash; we hit a snag.';
+    if (lead) {
+      lead.innerHTML = '<strong>Please call us directly</strong> and a specialist will take your info right now &mdash; no form, no wait.';
+    }
+    // Tuck the specific error at the bottom so the user can tell support what happened
+    var footnote = overload.querySelector('.success-cta-text');
+    if (footnote && detailMsg) {
+      footnote.innerHTML = 'Details: ' + detailMsg;
+    }
+    section.scrollIntoView({ behavior: 'smooth' });
   }
 
   function showMessage(text, type) {

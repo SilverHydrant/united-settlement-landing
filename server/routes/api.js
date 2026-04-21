@@ -8,6 +8,7 @@ const { submitViaBot } = require('../services/botSubmitter');
 const { enqueue, getStats, isFull, recordDuration } = require('../services/leadQueue');
 const leadStatus = require('../services/leadStatus');
 const leadStore = require('../services/leadStore');
+const { sendAlert } = require('../services/alerter');
 
 // Submission strategy:
 //   primary  — Playwright bot walks the live unitedsettlement.com form
@@ -103,6 +104,13 @@ function processLeadInBackground(lead, statusId) {
         leadId: statusId, status: 'failed', method: 'proxy',
         error: proxyResult.error || 'Unknown error'
       });
+      // Both bot and proxy failed — alert the operator. Lead is saved in
+      // /admin/leads so nothing is lost, but someone should call them back.
+      sendAlert(
+        'delivery-fail',
+        '🚨 Lead delivery failed (both bot + proxy)',
+        `${tag}\nPhone: ${lead.phone}\nEmail: ${lead.email}\nError: ${proxyResult.error}\nCheck /admin/leads`
+      );
     }
     return proxyResult;
   }).catch((err) => {
@@ -111,6 +119,11 @@ function processLeadInBackground(lead, statusId) {
     leadStore.saveDelivery({
       leadId: statusId, status: 'failed', method: 'queue', error: err.message
     });
+    sendAlert(
+      'queue-error',
+      '🚨 Queue runtime error',
+      `${tag}\nPhone: ${lead.phone}\nError: ${err.message}`
+    );
   });
 }
 
@@ -155,6 +168,13 @@ router.post('/submit',
         });
         const stats = await getStats();
         console.warn(`[OVERLOAD] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | queue=${stats.size}/${stats.maxSize} | pending=${stats.pending}`);
+        // Hot-traffic signal — alert once per 5 min (alerter throttles) so
+        // you know traffic is beating the queue and leads are being shed.
+        sendAlert(
+          'overload',
+          '⚠️ Queue is full — overload rejections in progress',
+          `Queue at ${stats.size}/${stats.maxSize} running ${stats.pending}. Latest: ${lead.fname} ${lead.lname} (${lead.state}, ${lead.phone}). Consider bumping BOT_CONCURRENCY or MAX_QUEUE_SIZE.`
+        );
         return res.status(503).json({
           success: false,
           overloaded: true,
