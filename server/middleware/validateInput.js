@@ -2,7 +2,11 @@
  * validateInput.js - Server-side input validation and sanitization
  */
 
-const BLOCKED_STATES = ['CT', 'IL', 'GA', 'KS', 'ME', 'NH', 'SC', 'OR', 'VT', 'WV'];
+// States where United Settlement does not operate. Users selecting one of
+// these from the form will get the "service not available in your state"
+// error. Also filtered out of the dropdown in public/index.html so users
+// can't pick them in the first place.
+const BLOCKED_STATES = ['CT', 'GA', 'IL', 'KS', 'ME', 'NH', 'NV', 'OR', 'SC', 'VT', 'WV'];
 
 const VALID_STATES = [
   'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL',
