@@ -33,30 +33,6 @@
     }
   })();
 
-  // Header phone "Call anytime" subtitle — only visible during business hours
-  // (9am-9pm ET). Uses Intl so the check ignores the visitor's device clock /
-  // timezone. Re-checks every minute so the badge flips automatically if a
-  // visitor has the tab open across the open/close boundary.
-  (function initHeaderStatus() {
-    var statusEl = document.getElementById('headerPhoneStatus');
-    if (!statusEl) return;
-
-    function etHour() {
-      var parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        hour: 'numeric',
-        hour12: false
-      }).formatToParts(new Date());
-      var h = parts.find(function(p) { return p.type === 'hour'; });
-      return h ? parseInt(h.value, 10) % 24 : 12;
-    }
-    function update() {
-      var h = etHour();
-      statusEl.hidden = !(h >= 9 && h < 21);
-    }
-    update();
-    setInterval(update, 60 * 1000);
-  })();
 
   // --- CTA Button Handlers ---
 
