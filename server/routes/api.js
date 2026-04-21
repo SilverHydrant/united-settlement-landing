@@ -5,7 +5,7 @@ const botDetection = require('../middleware/botDetection');
 const validateInput = require('../middleware/validateInput');
 const formProxy = require('../services/formProxy');
 const { submitViaBot } = require('../services/botSubmitter');
-const { enqueue, getStats } = require('../services/leadQueue');
+const { enqueue, getStats, isFull, recordDuration } = require('../services/leadQueue');
 const leadStatus = require('../services/leadStatus');
 const leadStore = require('../services/leadStore');
 
@@ -55,6 +55,9 @@ function processLeadInBackground(lead, statusId) {
       });
       if (r.success) {
         console.log(`[BOT OK] ${ts()} | ${tag} | step=${r.step} | http=${r.httpStatus} | ${r.durationMs}ms`);
+        // Feed real duration back into the queue's avg so future wait-time
+        // estimates reflect actual observed latency, not the bootstrap 20s.
+        recordDuration(r.durationMs);
         leadStatus.update(statusId, {
           state: 'submitted',
           step: r.step,
@@ -122,21 +125,45 @@ router.post('/submit',
         gclid: req.body.gclid
       };
 
+      // Overload guard: if the bot queue is saturated, reject with 503 so the
+      // frontend can show the "call us directly" fallback instead of putting
+      // the user in a line that'll take 10+ minutes. We STILL save the lead
+      // to our own store so you have the contact info even if it never made
+      // it into United Settlement's pipeline.
+      if (await isFull()) {
+        leadStore.saveLead(lead, { deliveryStatus: 'rejected-overloaded' });
+        const stats = await getStats();
+        console.warn(`[OVERLOAD] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | queue=${stats.size}/${stats.maxSize} | pending=${stats.pending}`);
+        return res.status(503).json({
+          success: false,
+          overloaded: true,
+          message: 'Our automated submission system is at capacity right now. Please call us directly at (516) 231-9239 — a specialist is standing by.'
+        });
+      }
+
       // Persist the lead to our own storage FIRST (before queueing the bot).
       // This way every submission is captured even if the bot/proxy later
       // fails. Best-effort — saveLead never throws.
       leadStore.saveLead(lead, { statusId: null });
 
+      // Take a stats snapshot BEFORE enqueue so the user gets a realistic
+      // "you're #N in line, ~X min wait" number right away.
+      const preStats = await getStats();
+      const position = preStats.size + preStats.pending + 1;
+      const estimatedWaitMs = preStats.estimatedWaitMs;
+
       // Create a lead-status record so the frontend can poll progress, then
       // enqueue the background job and return the ID to the client.
-      const status = leadStatus.create();
-      console.log(`[LEAD QUEUED] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | $${lead.lamount * 1000} | CallTime: ${lead.calltime} | id=${status.id}`);
+      const status = leadStatus.create({ position: position, estimatedWaitMs: estimatedWaitMs });
+      console.log(`[LEAD QUEUED] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | $${lead.lamount * 1000} | CallTime: ${lead.calltime} | id=${status.id} | pos=${position}/${preStats.maxSize}`);
       processLeadInBackground(lead, status.id);
 
       res.json({
         success: true,
         message: 'Your consultation request has been submitted!',
-        leadId: status.id
+        leadId: status.id,
+        position: position,
+        estimatedWaitMs: estimatedWaitMs
       });
     } catch (err) {
       console.error(`[SERVER ERROR] ${new Date().toISOString()} | ${err.message}`);

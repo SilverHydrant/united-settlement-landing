@@ -155,10 +155,24 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
       })
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
+      .then(function(res) { return res.json().then(function(body){ return { status: res.status, body: body }; }); })
+      .then(function(r) {
+        var data = r.body || {};
         btnSubmit.disabled = false;
         btnSubmit.classList.remove('loading');
+
+        // Queue is at capacity — flip to the overload screen with the call-us
+        // CTA instead of the normal success/progress flow. 503 is what the
+        // backend sends when isFull() returns true.
+        if (r.status === 503 && data.overloaded) {
+          document.getElementById('formSection').style.display = 'none';
+          document.getElementById('successSection').style.display = 'block';
+          document.getElementById('successProcessing').style.display = 'none';
+          document.getElementById('successFinal').style.display = 'none';
+          document.getElementById('successOverload').style.display = 'block';
+          document.getElementById('successSection').scrollIntoView({ behavior: 'smooth' });
+          return;
+        }
 
         if (data.success) {
           // Fire pixel event
@@ -172,6 +186,8 @@
           document.getElementById('successSection').style.display = 'block';
           document.getElementById('successProcessing').style.display = 'block';
           document.getElementById('successFinal').style.display = 'none';
+          var overloadEl = document.getElementById('successOverload');
+          if (overloadEl) overloadEl.style.display = 'none';
 
           // Remember the submitted call-time — we'll use it to pick the final
           // copy ("in 1 hour" / "tomorrow morning" / etc.) once the bot is done.
