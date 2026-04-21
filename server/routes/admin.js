@@ -23,6 +23,7 @@ const { getStats } = require('../services/leadQueue');
 
 function requireAdmin(req, res, next) {
   const pw = process.env.ADMIN_PASSWORD;
+  const expectedUser = process.env.ADMIN_USERNAME; // optional — if set, enforce
   if (!pw) {
     return res.status(503).type('text/plain').send(
       'Admin disabled: set the ADMIN_PASSWORD environment variable in Railway to enable.'
@@ -35,10 +36,14 @@ function requireAdmin(req, res, next) {
   }
   const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
   const idx = decoded.indexOf(':');
-  const supplied = idx >= 0 ? decoded.slice(idx + 1) : '';
-  if (supplied !== pw) {
+  const suppliedUser = idx >= 0 ? decoded.slice(0, idx) : '';
+  const suppliedPass = idx >= 0 ? decoded.slice(idx + 1) : '';
+  // Check password always; check username only if ADMIN_USERNAME is set.
+  const userOk = !expectedUser || suppliedUser === expectedUser;
+  const passOk = suppliedPass === pw;
+  if (!userOk || !passOk) {
     res.set('WWW-Authenticate', 'Basic realm="Admin"');
-    return res.status(401).type('text/plain').send('Wrong password');
+    return res.status(401).type('text/plain').send('Wrong username or password');
   }
   next();
 }
