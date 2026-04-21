@@ -14,6 +14,10 @@ const path = require('path');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.jsonl');
+// Append-only log of bot/proxy delivery outcomes. Each lead can have multiple
+// entries (bot-start, bot-finish, proxy-fallback) — the admin page takes the
+// most recent row per leadId to determine current state.
+const DELIVERIES_FILE = path.join(DATA_DIR, 'deliveries.jsonl');
 
 function ensureDataDir() {
   try {
@@ -106,4 +110,56 @@ function getDataFilePath() {
   return LEADS_FILE;
 }
 
-module.exports = { saveLead, readAllLeads, leadCount, getDataFilePath };
+/**
+ * Append a delivery-outcome record. Called by the API route every time the
+ * bot or proxy finishes (success or failure) for a given lead. Admin page
+ * reads these back and joins on leadId to show the current status.
+ */
+function saveDelivery(record) {
+  if (!ensureDataDir()) return false;
+  try {
+    var row = Object.assign({ savedAt: new Date().toISOString() }, record);
+    fs.appendFileSync(DELIVERIES_FILE, JSON.stringify(row) + '\n', 'utf8');
+    return true;
+  } catch (err) {
+    console.error('[leadStore] Failed to append delivery:', err.message);
+    return false;
+  }
+}
+
+function readAllDeliveries() {
+  try {
+    if (!fs.existsSync(DELIVERIES_FILE)) return [];
+    const text = fs.readFileSync(DELIVERIES_FILE, 'utf8');
+    return text.split('\n').filter(Boolean).map(function(line) {
+      try { return JSON.parse(line); } catch (_) { return null; }
+    }).filter(Boolean);
+  } catch (err) {
+    console.error('[leadStore] Read deliveries failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Build a lookup { leadId → latestDeliveryRecord } by replaying the log.
+ * Later entries win. Missing leadId → entry is skipped (can't join).
+ */
+function latestDeliveryByLeadId() {
+  const map = {};
+  const all = readAllDeliveries();
+  for (const d of all) {
+    if (!d.leadId) continue;
+    map[d.leadId] = d;
+  }
+  return map;
+}
+
+module.exports = {
+  saveLead,
+  readAllLeads,
+  leadCount,
+  getDataFilePath,
+  saveDelivery,
+  readAllDeliveries,
+  latestDeliveryByLeadId
+};

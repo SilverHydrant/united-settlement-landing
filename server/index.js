@@ -35,9 +35,43 @@ app.use(cors({
   credentials: true
 }));
 
+// Trust Railway's proxy so req.hostname reflects the real Host header
+app.set('trust proxy', 1);
+
 // Body parsing
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: false, limit: '10kb' }));
+
+// ---- Admin-domain split ----
+// If ADMIN_HOST env is set, two Railway domains behave differently:
+//   * Public host   → /admin routes return 404 (can't be probed/scraped)
+//   * Admin host    → GET / redirects straight to /admin/leads; bot form
+//                     endpoints (/api/submit) stay blocked (admin-only)
+// If ADMIN_HOST is not set, both routes work on every domain (legacy behavior).
+const ADMIN_HOST = (process.env.ADMIN_HOST || '').toLowerCase().trim();
+
+app.use((req, res, next) => {
+  if (!ADMIN_HOST) return next(); // single-domain mode
+  const host = (req.hostname || '').toLowerCase();
+  const isAdminHost = host === ADMIN_HOST;
+
+  if (isAdminHost) {
+    // On the admin domain, bounce the root to the leads dashboard
+    if (req.method === 'GET' && (req.path === '/' || req.path === '/index.html')) {
+      return res.redirect(302, '/admin/leads');
+    }
+    // Public API calls don't belong on the admin domain
+    if (req.path.startsWith('/api/submit')) {
+      return res.status(404).type('text/plain').send('Not found');
+    }
+  } else {
+    // On the public domain, /admin endpoints are hidden entirely
+    if (req.path.startsWith('/admin')) {
+      return res.status(404).type('text/plain').send('Not found');
+    }
+  }
+  next();
+});
 
 // Disable caching in development
 app.use((req, res, next) => {

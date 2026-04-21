@@ -55,8 +55,6 @@ function processLeadInBackground(lead, statusId) {
       });
       if (r.success) {
         console.log(`[BOT OK] ${ts()} | ${tag} | step=${r.step} | http=${r.httpStatus} | ${r.durationMs}ms`);
-        // Feed real duration back into the queue's avg so future wait-time
-        // estimates reflect actual observed latency, not the bootstrap 20s.
         recordDuration(r.durationMs);
         leadStatus.update(statusId, {
           state: 'submitted',
@@ -65,21 +63,34 @@ function processLeadInBackground(lead, statusId) {
           finishedAt: Date.now(),
           durationMs: r.durationMs
         });
+        leadStore.saveDelivery({
+          leadId: statusId, status: 'submitted', method: 'bot',
+          httpStatus: r.httpStatus, durationMs: r.durationMs, step: r.step
+        });
         return r;
       }
       console.error(`[BOT FAIL] ${ts()} | ${tag} | step=${r.step} | ${r.error} | ${r.durationMs}ms — falling back to proxy`);
       leadStatus.update(statusId, { method: 'proxy', step: 'fallback' });
+      leadStore.saveDelivery({
+        leadId: statusId, status: 'bot-failed-falling-back', method: 'bot',
+        step: r.step, error: r.error, durationMs: r.durationMs
+      });
     }
 
     // Proxy fallback (or primary if USE_BOT=false)
     const proxyResult = await formProxy.submit(lead);
     if (proxyResult.success) {
       console.log(`[PROXY OK] ${ts()} | ${tag}`);
+      const startedAt = leadStatus.get(statusId)?.startedAt || Date.now();
+      const durationMs = Date.now() - startedAt;
       leadStatus.update(statusId, {
         state: 'submitted',
         step: 'proxy-submitted',
         finishedAt: Date.now(),
-        durationMs: Date.now() - (leadStatus.get(statusId)?.startedAt || Date.now())
+        durationMs
+      });
+      leadStore.saveDelivery({
+        leadId: statusId, status: 'submitted', method: 'proxy', durationMs
       });
     } else {
       console.error(`[PROXY FAIL] ${ts()} | ${tag} | ${proxyResult.error}`);
@@ -88,11 +99,18 @@ function processLeadInBackground(lead, statusId) {
         error: proxyResult.error || 'Unknown error',
         finishedAt: Date.now()
       });
+      leadStore.saveDelivery({
+        leadId: statusId, status: 'failed', method: 'proxy',
+        error: proxyResult.error || 'Unknown error'
+      });
     }
     return proxyResult;
   }).catch((err) => {
     console.error(`[QUEUE ERROR] ${ts()} | ${tag} | ${err.message}`);
     leadStatus.update(statusId, { state: 'failed', error: err.message, finishedAt: Date.now() });
+    leadStore.saveDelivery({
+      leadId: statusId, status: 'failed', method: 'queue', error: err.message
+    });
   });
 }
 
@@ -128,10 +146,13 @@ router.post('/submit',
       // Overload guard: if the bot queue is saturated, reject with 503 so the
       // frontend can show the "call us directly" fallback instead of putting
       // the user in a line that'll take 10+ minutes. We STILL save the lead
-      // to our own store so you have the contact info even if it never made
-      // it into United Settlement's pipeline.
+      // (and a delivery record) so the admin page sees overloaded rejections.
       if (await isFull()) {
-        leadStore.saveLead(lead, { deliveryStatus: 'rejected-overloaded' });
+        const overloadId = require('crypto').randomBytes(6).toString('hex');
+        leadStore.saveLead(lead, { leadId: overloadId, deliveryStatus: 'rejected-overloaded' });
+        leadStore.saveDelivery({
+          leadId: overloadId, status: 'rejected-overloaded', method: 'none'
+        });
         const stats = await getStats();
         console.warn(`[OVERLOAD] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | queue=${stats.size}/${stats.maxSize} | pending=${stats.pending}`);
         return res.status(503).json({
@@ -141,20 +162,20 @@ router.post('/submit',
         });
       }
 
-      // Persist the lead to our own storage FIRST (before queueing the bot).
-      // This way every submission is captured even if the bot/proxy later
-      // fails. Best-effort — saveLead never throws.
-      leadStore.saveLead(lead, { statusId: null });
-
-      // Take a stats snapshot BEFORE enqueue so the user gets a realistic
-      // "you're #N in line, ~X min wait" number right away.
+      // Create the status record FIRST so we have a stable leadId to stamp
+      // onto both the persisted lead and every delivery row — the admin page
+      // joins on this id.
       const preStats = await getStats();
       const position = preStats.size + preStats.pending + 1;
       const estimatedWaitMs = preStats.estimatedWaitMs;
-
-      // Create a lead-status record so the frontend can poll progress, then
-      // enqueue the background job and return the ID to the client.
       const status = leadStatus.create({ position: position, estimatedWaitMs: estimatedWaitMs });
+
+      // Persist the lead to our own storage with the leadId embedded.
+      leadStore.saveLead(lead, { leadId: status.id });
+      // Seed delivery log with a "queued" row so newly-submitted leads show
+      // up in the admin page before the bot has even had a chance to run.
+      leadStore.saveDelivery({ leadId: status.id, status: 'queued', method: USE_BOT ? 'bot' : 'proxy' });
+
       console.log(`[LEAD QUEUED] ${new Date().toISOString()} | ${lead.fname} ${lead.lname} | ${lead.state} | $${lead.lamount * 1000} | CallTime: ${lead.calltime} | id=${status.id} | pos=${position}/${preStats.maxSize}`);
       processLeadInBackground(lead, status.id);
 
