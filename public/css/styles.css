@@ -760,6 +760,32 @@ a { color: inherit; text-decoration: none; }
   font-weight: 700;
 }
 
+/* Trust line above the big legal paragraph — short, quietly reassuring,
+   sits right below the Continue button so it's the last thing the user
+   reads before the dense legalese. */
+.form-no-sell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #4a5863;
+  text-align: center;
+  margin-top: 14px;
+  margin-bottom: 0;
+  line-height: 1.4;
+}
+
+.form-no-sell svg {
+  color: #19a4ac;
+  flex-shrink: 0;
+}
+
+.form-no-sell strong {
+  color: #0b304a;
+  font-weight: 800;
+}
+
 /* ---- Success ---- */
 /* Shared across both success states (processing + final) */
 .success-processing,
