@@ -6,6 +6,7 @@ const cors = require('cors');
 const path = require('path');
 const apiRoutes = require('./routes/api');
 const adminRoutes = require('./routes/admin');
+const { geoGuard, geoInfoHandler } = require('./middleware/geoGuard');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,6 +81,14 @@ app.use((req, res, next) => {
   res.set('Expires', '0');
   next();
 });
+
+// Geo-guard: block EU/UK visitors, tag California requests on req.geo.
+// Runs BEFORE static files so blocked visitors never see the landing page.
+app.use(geoGuard);
+
+// Lightweight endpoint the frontend polls once on load to decide whether to
+// show the California CPRA notice banner. Returns { isCalifornia, country, region }.
+app.get('/api/geo', geoInfoHandler);
 
 // Serve static files
 app.use(express.static(path.join(__dirname, '..', 'public'), { etag: false, lastModified: false }));

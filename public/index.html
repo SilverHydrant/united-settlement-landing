@@ -547,11 +547,27 @@
         United Debt Settlement LLC is registered with DFPI under CCFPL – Registration number 01-CCFPL-1947026-3424044
       </p>
       <p class="footer-links">
-        <a href="https://unitedsettlement.com/privacy-policy/" target="_blank" rel="noopener">Privacy Policy</a> |
+        <a href="/privacy.html">Privacy Policy</a> |
+        <a href="/privacy.html#california">Do Not Share My Info</a> |
         <a href="https://unitedsettlement.com/terms-and-conditions/" target="_blank" rel="noopener">Terms &amp; Conditions</a>
       </p>
     </div>
   </footer>
+
+  <!-- California CPRA notice banner — loads only for visitors identified as
+       California residents by IP (via /api/geo). Hidden by default so we
+       never flash a banner at non-CA visitors. -->
+  <div class="ca-notice" id="caNotice" hidden>
+    <div class="ca-notice-inner">
+      <div class="ca-notice-text">
+        <strong>California Privacy Notice:</strong> We collect your name, phone, email, DOB, and debt amount to connect you with United Settlement for debt relief evaluation. We also use Meta (Facebook) advertising which drops a cookie (<code>_fbp</code>) to measure ad performance &mdash; this counts as &ldquo;sharing&rdquo; under CPRA.
+      </div>
+      <div class="ca-notice-actions">
+        <a href="/privacy.html#california" class="ca-notice-link">Privacy Policy &amp; Your Rights</a>
+        <button type="button" id="caNoticeClose" class="ca-notice-close" aria-label="Dismiss">Got it</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/js/botGuard.js"></script>
   <script src="/js/pixel.js"></script>

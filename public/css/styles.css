@@ -568,6 +568,84 @@ a { color: inherit; text-decoration: none; }
 .form-message.success { background: #e8f8f5; color: #1a7a6d; }
 .form-message.error { background: #fdf0ef; color: #c0392b; }
 
+/* ---- California CPRA notice banner (bottom-fixed, only for CA visitors) ---- */
+.ca-notice {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0b304a;
+  color: #e2e8ef;
+  z-index: 1000;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.ca-notice[hidden] {
+  display: none;
+}
+
+.ca-notice-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ca-notice-text {
+  flex: 1 1 60%;
+  font-size: 13px;
+  line-height: 1.5;
+  min-width: 260px;
+}
+
+.ca-notice-text strong {
+  color: #ffffff;
+}
+
+.ca-notice-text code {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.ca-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ca-notice-link {
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.ca-notice-link:hover {
+  text-decoration: none;
+}
+
+.ca-notice-close {
+  background: #ef8441;
+  color: #ffffff;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ca-notice-close:hover {
+  background: #d97224;
+}
+
 /* ---- Lead progress tracker (live bot status) ---- */
 .lead-progress {
   background: #f4fbfc;

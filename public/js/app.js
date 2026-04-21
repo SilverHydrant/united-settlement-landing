@@ -10,6 +10,29 @@
     window.Pixel.init('2221485628258289');
   }
 
+  // California CPRA notice banner — only appears for visitors our geo
+  // middleware flagged as US-CA. Remembers dismissal in sessionStorage so
+  // the banner doesn't harass a CA user on every page reload in one session.
+  (function initCaliforniaNotice() {
+    var notice = document.getElementById('caNotice');
+    if (!notice) return;
+    // If the user already dismissed in this session, skip the fetch entirely.
+    if (sessionStorage.getItem('caNoticeDismissed') === '1') return;
+    fetch('/api/geo')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (data && data.isCalifornia) notice.hidden = false;
+      })
+      .catch(function() { /* silent — this is non-essential */ });
+    var close = document.getElementById('caNoticeClose');
+    if (close) {
+      close.addEventListener('click', function() {
+        notice.hidden = true;
+        try { sessionStorage.setItem('caNoticeDismissed', '1'); } catch (_) {}
+      });
+    }
+  })();
+
   // Header phone "Call anytime" subtitle — only visible during business hours
   // (9am-9pm ET). Uses Intl so the check ignores the visitor's device clock /
   // timezone. Re-checks every minute so the badge flips automatically if a
