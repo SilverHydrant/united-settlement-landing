@@ -49,6 +49,19 @@ app.use(cors({
 // Trust Railway's proxy so req.hostname reflects the real Host header
 app.set('trust proxy', 1);
 
+// Force HTTPS: any http:// request hitting us gets a 301 permanent redirect
+// to the https:// equivalent. Railway terminates TLS at its edge and forwards
+// with x-forwarded-proto; we trust that header because of `trust proxy` above.
+// Skipped for NODE_ENV !== 'production' so local http://localhost works.
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== 'production') return next();
+  const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+  if (proto !== 'https') {
+    return res.redirect(301, 'https://' + req.headers.host + req.originalUrl);
+  }
+  next();
+});
+
 // Body parsing
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: false, limit: '10kb' }));

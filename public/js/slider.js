@@ -20,9 +20,11 @@
       var val = parseInt(slider.value, 10);
       amountDisplay.textContent = val >= 100 ? '$100,000+' : formatDollar(val);
 
-      // Update savings estimate (up to 50%)
+      // Update savings estimate — 45% reflects average savings per client
+      // across the program, which is more honest than showing "up to 50%"
+      // that's a ceiling few people actually hit.
       if (savingsDisplay) {
-        var savings = val >= 100 ? 50000 : Math.round(val * 1000 * 0.5);
+        var savings = val >= 100 ? 45000 : Math.round(val * 1000 * 0.45);
         savingsDisplay.textContent = '$' + savings.toLocaleString('en-US');
       }
     }
