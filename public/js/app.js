@@ -36,16 +36,19 @@
 
   // --- CTA Button Handlers ---
 
-  // Call Now button
-  var btnCall = document.getElementById('btnCall');
-  var headerPhone = document.getElementById('headerPhone');
-
-  function onCallClick() {
-    if (window.Pixel) window.Pixel.callClicked();
-  }
-
-  if (btnCall) btnCall.addEventListener('click', onCallClick);
-  if (headerPhone) headerPhone.addEventListener('click', onCallClick);
+  // Catch EVERY phone-call link on the page in one sweep: hero CTA, header
+  // phone, footer phone, "Start Here" step buttons, "Call Now to Start Step
+  // 1", bottom CTA, etc. Anything with href="tel:..." gets tracked exactly
+  // once. (The old per-id listeners are replaced by this single loop so we
+  // don't double-fire.)
+  document.querySelectorAll('a[href^="tel:"]').forEach(function(el) {
+    el.addEventListener('click', function() {
+      if (window.Pixel) window.Pixel.callClicked();
+      if (window.Tracker) window.Tracker.callClick({
+        source: el.id || el.className || 'tel_link'
+      });
+    });
+  });
 
   // Schedule a Call button
   var btnSchedule = document.getElementById('btnSchedule');
@@ -69,12 +72,12 @@
       }
 
       if (window.Pixel) window.Pixel.scheduleClicked();
+      if (window.Tracker) window.Tracker.scheduleClick({ visible: formVisible });
     });
   }
 
-  // Bottom call button pixel tracking
-  var btnCallBottom = document.getElementById('btnCallBottom');
-  if (btnCallBottom) btnCallBottom.addEventListener('click', onCallClick);
+  // (Previously had an explicit handler for #btnCallBottom here — now
+  // covered by the blanket tel:-link handler above.)
 
   // How It Works tabs
   function activateHowPanel(panelId) {
@@ -103,6 +106,7 @@
           content_category: 'how_it_works_engagement'
         });
       }
+      if (window.Tracker) window.Tracker.tabClick({ panel: panel, kind: 'direct' });
       activateHowPanel(panel);
     });
   });
@@ -119,6 +123,7 @@
           content_category: 'tab_progress'
         });
       }
+      if (window.Tracker) window.Tracker.tabClick({ panel: nextPanel, kind: 'next' });
       // Anchor scroll to the tabs bar so the panel swap doesn't yank
       // the user up or down when the new panel has a different height
       var tabsBar = document.querySelector('.how-tabs');
@@ -171,15 +176,18 @@
       // Pixel: fire on OPEN (not on close) so the event signals real
       // engagement with a question's answer. Fires once per accordion
       // open, re-fires if the same question is opened again.
-      if (!isOpen && window.Pixel) {
+      if (!isOpen) {
         // Pull the question text out of the button — trim the trailing
         // "+"/"−" arrow character for a cleaner event payload.
         var qText = (btn.innerText || '').replace(/\s*[+\u2212\u2013-]\s*$/, '').trim();
-        window.Pixel.fire('FAQClick', {
-          content_name: 'faq_' + (idx + 1),
-          content_category: 'faq_engagement',
-          content_ids: [qText.slice(0, 80)]
-        });
+        if (window.Pixel) {
+          window.Pixel.fire('FAQClick', {
+            content_name: 'faq_' + (idx + 1),
+            content_category: 'faq_engagement',
+            content_ids: [qText.slice(0, 80)]
+          });
+        }
+        if (window.Tracker) window.Tracker.faqClick({ index: idx + 1, q: qText.slice(0, 80) });
       }
 
       // Close all items in same accordion
@@ -201,6 +209,7 @@
   if (btnLearn) {
     btnLearn.addEventListener('click', function() {
       if (window.Pixel) window.Pixel.learnMoreClicked();
+      if (window.Tracker) window.Tracker.learnMoreClick();
     });
   }
 })();

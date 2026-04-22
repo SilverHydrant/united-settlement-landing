@@ -224,6 +224,16 @@
           if (window.Pixel) {
             window.Pixel.leadSubmitted(formData.lamount * 1000);
           }
+          // Also record on our own volume so the admin dashboard has a
+          // real number it can trust even if the Meta Pixel is ad-blocked.
+          if (window.Tracker) {
+            window.Tracker.track('schedule_click', {
+              submitted: true,
+              debtUSD: formData.lamount * 1000,
+              calltime: formData.calltime,
+              state: formData.state
+            });
+          }
 
           // Swap form → success section. Start in the "processing" state; the
           // poller will flip to the "final" state once the bot reports back.

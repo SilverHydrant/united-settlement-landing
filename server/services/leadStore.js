@@ -154,6 +154,41 @@ function latestDeliveryByLeadId() {
   return map;
 }
 
+// Append-only log of engagement events (call-click, schedule-click, etc.) —
+// driven by POST /api/track from the browser. This is separate from leads
+// because events happen constantly (every page has ~5 tracked actions) and
+// we don't want to mix high-frequency pings with the lead table.
+const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
+
+/**
+ * Append an engagement event. Best-effort: never throws.
+ * record shape: { event, ts, ip, ua, meta }
+ */
+function saveEvent(record) {
+  if (!ensureDataDir()) return false;
+  try {
+    const row = Object.assign({ savedAt: new Date().toISOString() }, record);
+    fs.appendFileSync(EVENTS_FILE, JSON.stringify(row) + '\n', 'utf8');
+    return true;
+  } catch (err) {
+    console.error('[leadStore] Failed to append event:', err.message);
+    return false;
+  }
+}
+
+function readAllEvents() {
+  try {
+    if (!fs.existsSync(EVENTS_FILE)) return [];
+    const text = fs.readFileSync(EVENTS_FILE, 'utf8');
+    return text.split('\n').filter(Boolean).map(function(line) {
+      try { return JSON.parse(line); } catch (_) { return null; }
+    }).filter(Boolean);
+  } catch (err) {
+    console.error('[leadStore] Read events failed:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   saveLead,
   readAllLeads,
@@ -161,5 +196,7 @@ module.exports = {
   getDataFilePath,
   saveDelivery,
   readAllDeliveries,
-  latestDeliveryByLeadId
+  latestDeliveryByLeadId,
+  saveEvent,
+  readAllEvents
 };

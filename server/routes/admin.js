@@ -17,7 +17,8 @@ const {
   leadCount,
   getDataFilePath,
   readAllDeliveries,
-  latestDeliveryByLeadId
+  latestDeliveryByLeadId,
+  readAllEvents
 } = require('../services/leadStore');
 const { getStats } = require('../services/leadQueue');
 
@@ -200,6 +201,92 @@ function renderSummaryCards(summary, queueStats) {
   `;
 }
 
+// Aggregate events.jsonl into counts per event type, split across three time
+// windows. "Today" is the calendar day in the server's UTC wall clock —
+// close enough to America/New_York that the boss's "today so far" reading
+// matches reality within a few hours near midnight. Good enough for ops.
+function computeEngagement(events) {
+  const nowMs = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const startOfTodayMs = startOfToday.getTime();
+  const sevenDaysAgoMs = nowMs - 7 * DAY_MS;
+
+  const EVENT_TYPES = [
+    'call_click', 'schedule_click', 'form_start', 'form_error',
+    'learn_more_click', 'slider_move', 'tab_click', 'faq_click', 'page_view'
+  ];
+  const counts = {};
+  EVENT_TYPES.forEach(function(k) { counts[k] = { all: 0, today: 0, week: 0 }; });
+
+  let scheduleSubmits = { all: 0, today: 0, week: 0 };
+
+  for (const e of events) {
+    const t = Date.parse(e.savedAt || e.ts || 0);
+    if (!counts[e.event]) continue;
+    counts[e.event].all++;
+    if (t >= sevenDaysAgoMs) counts[e.event].week++;
+    if (t >= startOfTodayMs) counts[e.event].today++;
+    // schedule_click events with {submitted:true} are actual form completions
+    if (e.event === 'schedule_click' && e.meta && e.meta.submitted) {
+      scheduleSubmits.all++;
+      if (t >= sevenDaysAgoMs) scheduleSubmits.week++;
+      if (t >= startOfTodayMs) scheduleSubmits.today++;
+    }
+  }
+
+  return { counts: counts, scheduleSubmits: scheduleSubmits };
+}
+
+function renderEngagementCards(engagement, totalLeadsFromDisk) {
+  // "Submitted the form" preferentially uses the leads table (the persisted
+  // ground truth). Event counts are a secondary signal in case the volume
+  // lost data between a deploy and now, or sendBeacon was blocked.
+  const c = engagement.counts;
+  const card = function(label, color, total, today, week, note) {
+    return `
+      <div class="eng-card" style="border-top-color:${color}">
+        <div class="eng-label">${label}</div>
+        <div class="eng-value">${total.toLocaleString()}</div>
+        <div class="eng-breakdown">
+          <span title="Since midnight local">Today: <b>${today}</b></span>
+          <span title="Last 7 days">7d: <b>${week}</b></span>
+        </div>
+        ${note ? `<div class="eng-note">${note}</div>` : ''}
+      </div>
+    `;
+  };
+  return `
+    <div class="eng-section">
+      <div class="eng-title">Engagement (last-known from volume)</div>
+      <div class="eng-cards">
+        ${card('📞 Call button clicks', '#19a4ac',
+            c.call_click.all, c.call_click.today, c.call_click.week,
+            'Every phone-call CTA tapped (header, hero, footer, step CTAs)')}
+        ${card('📋 Form submissions', '#1a7a6d',
+            totalLeadsFromDisk,
+            engagement.scheduleSubmits.today, engagement.scheduleSubmits.week,
+            'Actual completed leads (from leads table above)')}
+        ${card('🗓 Schedule button opens', '#435a6a',
+            c.schedule_click.all - engagement.scheduleSubmits.all,
+            Math.max(0, c.schedule_click.today - engagement.scheduleSubmits.today),
+            Math.max(0, c.schedule_click.week - engagement.scheduleSubmits.week),
+            'Opened the form but did NOT submit')}
+        ${card('📖 Learn More', '#8a95a0',
+            c.learn_more_click.all, c.learn_more_click.today, c.learn_more_click.week)}
+        ${card('📑 Tab clicks', '#8a95a0',
+            c.tab_click.all, c.tab_click.today, c.tab_click.week,
+            'How-It-Works tabs')}
+        ${card('❓ FAQ opens', '#8a95a0',
+            c.faq_click.all, c.faq_click.today, c.faq_click.week)}
+        ${card('👀 Page views', '#0b304a',
+            c.page_view.all, c.page_view.today, c.page_view.week,
+            'Beacon on every landing; use as a sanity check')}
+      </div>
+    </div>
+  `;
+}
+
 function renderLeadsHtml(leads, queueStats) {
   const deliveriesByLeadId = latestDeliveryByLeadId();
   const summary = computeSummary(leads, queueStats ? { ...deliveriesByLeadId } : deliveriesByLeadId);
@@ -276,6 +363,15 @@ function renderLeadsHtml(leads, queueStats) {
     .delivery-meta{font-size:10px;color:#8a95a0;margin-top:4px}
     .empty{padding:60px;text-align:center;color:#8a95a0;background:#fff;border-radius:8px}
     .search{margin-bottom:12px;padding:10px 14px;border:1px solid #d8dde3;border-radius:6px;width:100%;font-size:14px;background:#fff}
+    .eng-section{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+    .eng-title{font-size:11px;font-weight:800;color:#7a848c;text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
+    .eng-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+    .eng-card{background:#f8fafc;border-radius:8px;padding:12px 14px;border-top:3px solid #d8dde3}
+    .eng-label{font-size:11px;font-weight:700;color:#4a5863;margin-bottom:4px}
+    .eng-value{font-size:24px;font-weight:900;color:#0b304a;line-height:1}
+    .eng-breakdown{font-size:11px;color:#6a747d;margin-top:4px;display:flex;gap:12px}
+    .eng-breakdown b{color:#0b304a;font-weight:700}
+    .eng-note{font-size:10px;color:#8a95a0;margin-top:6px;line-height:1.35}
   </style>
 </head><body>
 <div class="wrap">
@@ -294,8 +390,10 @@ function renderLeadsHtml(leads, queueStats) {
 
   ${renderSummaryCards(summary, queueStats || { pending: 0, size: 0, maxSize: 30 })}
 
+  ${renderEngagementCards(computeEngagement(readAllEvents()), leads.length)}
+
   ${leads.length === 0 ? `
-    <div class="empty">No leads yet. Submit one on the public site to see it appear here.</div>
+    <div class="empty">No form submissions yet — but call clicks and page views are still being tracked in the Engagement card above. Submit one on the public site to see it appear here.</div>
   ` : `
     ${renderCallbackFilter(leads)}
     <input class="search" id="q" placeholder="Search name, email, phone, state, status…" oninput="filter()">
@@ -367,7 +465,17 @@ router.get('/leads.json', requireAdmin, (req, res) => {
 });
 
 router.get('/stats', requireAdmin, (req, res) => {
-  res.json({ count: leadCount(), dataFile: getDataFilePath() });
+  const engagement = computeEngagement(readAllEvents());
+  res.json({
+    leads: leadCount(),
+    engagement: engagement,
+    dataFile: getDataFilePath()
+  });
+});
+
+// Raw event log for debugging / Excel exports
+router.get('/events.json', requireAdmin, (req, res) => {
+  res.json(readAllEvents());
 });
 
 module.exports = router;

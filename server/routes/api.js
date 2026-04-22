@@ -216,4 +216,62 @@ router.post('/submit',
   }
 );
 
+/**
+ * Lightweight engagement tracker. Called by the browser (via sendBeacon for
+ * call-clicks, fetch otherwise) whenever the user interacts with a tracked
+ * element: call button, schedule button, learn-more, slider, etc.
+ *
+ * Events are appended to /data/events.jsonl. Admin page aggregates them for
+ * "N people clicked the call button this week" style reporting.
+ *
+ * Body: { event: string, meta?: object }
+ * - event is capped to 40 chars of [a-z0-9_]
+ * - meta is capped to 1 KB JSON
+ */
+const ALLOWED_EVENTS = new Set([
+  'call_click',       // any phone-call CTA tapped
+  'schedule_click',   // "Schedule a free consultation" button
+  'learn_more_click', // "Learn More" button
+  'slider_move',      // debt slider first interaction
+  'tab_click',        // one of the How-It-Works tabs
+  'faq_click',        // FAQ toggle
+  'form_start',       // first focus on any form input
+  'form_error',       // client-side validation blocked a submit
+  'page_view'         // per-page landing beacon (sanity check)
+]);
+
+router.post('/track',
+  rateLimiter,
+  (req, res) => {
+    try {
+      const rawEvent = String(req.body && req.body.event || '').toLowerCase().trim();
+      if (!ALLOWED_EVENTS.has(rawEvent)) {
+        return res.status(400).json({ success: false, message: 'Unknown event' });
+      }
+      // Cap meta to 1 KB to prevent log blowout.
+      let meta = req.body && req.body.meta;
+      if (meta && typeof meta === 'object') {
+        try {
+          const s = JSON.stringify(meta);
+          if (s.length > 1024) meta = { _truncated: true };
+        } catch (_) { meta = null; }
+      } else {
+        meta = null;
+      }
+      leadStore.saveEvent({
+        event: rawEvent,
+        ip: req.ip,
+        ua: (req.headers['user-agent'] || '').slice(0, 200),
+        ref: (req.headers.referer || '').slice(0, 200),
+        meta: meta
+      });
+      res.json({ success: true });
+    } catch (err) {
+      // Tracker must never 500 — it's on the hot path
+      console.error(`[TRACK ERROR] ${err.message}`);
+      res.json({ success: false });
+    }
+  }
+);
+
 module.exports = router;
