@@ -1358,6 +1358,26 @@ a { color: inherit; text-decoration: none; }
   margin: 0 auto;
 }
 
+/* Small secondary "Learn more about United Settlement" link below the
+   orange Call CTA — sits quietly, doesn't compete with the main action. */
+.second-cta .btn-tertiary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 8px 16px;
+  color: #19a4ac;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+  border-bottom: 1.5px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.second-cta .btn-tertiary:hover {
+  border-bottom-color: #19a4ac;
+}
+
 /* ---- Footer ---- */
 .footer {
   background: #0b304a;
