@@ -238,14 +238,30 @@ function computeEngagement(events) {
   return { counts: counts, scheduleSubmits: scheduleSubmits };
 }
 
-function renderEngagementCards(engagement, totalLeadsFromDisk) {
+function renderEngagementCards(engagement, leads, events) {
   // "Submitted the form" preferentially uses the leads table (the persisted
   // ground truth). Event counts are a secondary signal in case the volume
   // lost data between a deploy and now, or sendBeacon was blocked.
   const c = engagement.counts;
-  const card = function(label, color, total, today, week, note) {
+
+  // Build the per-card detail panels. Each click on a card toggles the
+  // matching panel; only one panel open at a time.
+  // For form submissions we pull rows from the leads list (has names).
+  // For everything else we filter the events log.
+  const leadsPanel = renderLeadsDetailPanel(leads.slice().reverse());
+  const byEvent = {
+    call_click:       renderEventsDetailPanel(events, 'call_click'),
+    schedule_opens:   renderScheduleOpensPanel(events, leads),
+    learn_more_click: renderEventsDetailPanel(events, 'learn_more_click'),
+    tab_click:        renderEventsDetailPanel(events, 'tab_click'),
+    faq_click:        renderEventsDetailPanel(events, 'faq_click'),
+    page_view:        renderEventsDetailPanel(events, 'page_view')
+  };
+
+  // Each card gets a data-panel pointing to the <div> it reveals.
+  const card = function(panelKey, label, color, total, today, week, note) {
     return `
-      <div class="eng-card" style="border-top-color:${color}">
+      <div class="eng-card" data-panel="${panelKey}" style="border-top-color:${color}" tabindex="0" role="button" aria-label="${label} — click to view details">
         <div class="eng-label">${label}</div>
         <div class="eng-value">${total.toLocaleString()}</div>
         <div class="eng-breakdown">
@@ -253,37 +269,171 @@ function renderEngagementCards(engagement, totalLeadsFromDisk) {
           <span title="Last 7 days">7d: <b>${week}</b></span>
         </div>
         ${note ? `<div class="eng-note">${note}</div>` : ''}
+        <div class="eng-expand">↓ click to view</div>
       </div>
     `;
   };
+
+  const openGap = c.schedule_click.all - engagement.scheduleSubmits.all;
+
   return `
     <div class="eng-section">
-      <div class="eng-title">Engagement (last-known from volume)</div>
+      <div class="eng-title">Engagement — click any card to see the details</div>
       <div class="eng-cards">
-        ${card('📞 Call button clicks', '#19a4ac',
-            c.call_click.all, c.call_click.today, c.call_click.week,
-            'Every phone-call CTA tapped (header, hero, footer, step CTAs)')}
-        ${card('📋 Form submissions', '#1a7a6d',
-            totalLeadsFromDisk,
+        ${card('form_submissions', '📋 Form submissions', '#1a7a6d',
+            leads.length,
             engagement.scheduleSubmits.today, engagement.scheduleSubmits.week,
-            'Actual completed leads (from leads table above)')}
-        ${card('🗓 Schedule button opens', '#435a6a',
-            c.schedule_click.all - engagement.scheduleSubmits.all,
+            'Actual completed leads — names / phones / emails inside')}
+        ${card('call_click', '📞 Call button clicks', '#19a4ac',
+            c.call_click.all, c.call_click.today, c.call_click.week,
+            'Every phone-call CTA tapped')}
+        ${card('schedule_opens', '🗓 Schedule opens (no submit)', '#435a6a',
+            Math.max(0, openGap),
             Math.max(0, c.schedule_click.today - engagement.scheduleSubmits.today),
             Math.max(0, c.schedule_click.week - engagement.scheduleSubmits.week),
-            'Opened the form but did NOT submit')}
-        ${card('📖 Learn More', '#8a95a0',
+            'Opened the form but didn\u2019t submit')}
+        ${card('learn_more_click', '📖 Learn More', '#8a95a0',
             c.learn_more_click.all, c.learn_more_click.today, c.learn_more_click.week)}
-        ${card('📑 Tab clicks', '#8a95a0',
+        ${card('tab_click', '📑 Tab clicks', '#8a95a0',
             c.tab_click.all, c.tab_click.today, c.tab_click.week,
             'How-It-Works tabs')}
-        ${card('❓ FAQ opens', '#8a95a0',
+        ${card('faq_click', '❓ FAQ opens', '#8a95a0',
             c.faq_click.all, c.faq_click.today, c.faq_click.week)}
-        ${card('👀 Page views', '#0b304a',
+        ${card('page_view', '👀 Page views', '#0b304a',
             c.page_view.all, c.page_view.today, c.page_view.week,
-            'Beacon on every landing; use as a sanity check')}
+            'One beacon per page load')}
+      </div>
+
+      <div class="eng-panels">
+        <div class="eng-panel" data-panel="form_submissions" hidden>
+          <div class="eng-panel-title">📋 Form submissions (${leads.length})</div>
+          ${leadsPanel}
+        </div>
+        <div class="eng-panel" data-panel="call_click" hidden>
+          <div class="eng-panel-title">📞 Call button clicks (${c.call_click.all})</div>
+          ${byEvent.call_click}
+        </div>
+        <div class="eng-panel" data-panel="schedule_opens" hidden>
+          <div class="eng-panel-title">🗓 Schedule opens that didn\u2019t submit (${Math.max(0, openGap)})</div>
+          ${byEvent.schedule_opens}
+        </div>
+        <div class="eng-panel" data-panel="learn_more_click" hidden>
+          <div class="eng-panel-title">📖 Learn More clicks (${c.learn_more_click.all})</div>
+          ${byEvent.learn_more_click}
+        </div>
+        <div class="eng-panel" data-panel="tab_click" hidden>
+          <div class="eng-panel-title">📑 Tab clicks (${c.tab_click.all})</div>
+          ${byEvent.tab_click}
+        </div>
+        <div class="eng-panel" data-panel="faq_click" hidden>
+          <div class="eng-panel-title">❓ FAQ opens (${c.faq_click.all})</div>
+          ${byEvent.faq_click}
+        </div>
+        <div class="eng-panel" data-panel="page_view" hidden>
+          <div class="eng-panel-title">👀 Page views (${c.page_view.all})</div>
+          ${byEvent.page_view}
+        </div>
       </div>
     </div>
+  `;
+}
+
+// Newest-first mini-table of leads — name, phone, email, state, debt, time.
+// Same shape as the big leads table but trimmed and shown inline when the
+// user taps the "Form submissions" card.
+function renderLeadsDetailPanel(leadsNewestFirst) {
+  if (!leadsNewestFirst.length) {
+    return '<div class="eng-empty">No form submissions yet.</div>';
+  }
+  const rows = leadsNewestFirst.map(function(l) {
+    return `
+      <tr>
+        <td class="muted">${htmlEscape(fmtTime(l.savedAt))}</td>
+        <td><b>${htmlEscape((l.fname || '') + ' ' + (l.lname || ''))}</b></td>
+        <td><a href="tel:${htmlEscape(l.phone)}">${htmlEscape(fmtPhone(l.phone))}</a></td>
+        <td><a href="mailto:${htmlEscape(l.email)}">${htmlEscape(l.email)}</a></td>
+        <td>${htmlEscape(l.state)}</td>
+        <td>$${Number(l.debtUSD || 0).toLocaleString()}</td>
+        <td>${htmlEscape(l.calltime)}</td>
+      </tr>
+    `;
+  }).join('');
+  return `
+    <table class="eng-table">
+      <thead><tr><th>Time</th><th>Name</th><th>Phone</th><th>Email</th><th>State</th><th>Debt</th><th>Callback</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// Generic event panel: time / details / IP / UA. Shows the 200 newest
+// matching events (anything older is there in /admin/events.json if
+// someone needs it).
+function renderEventsDetailPanel(events, eventType) {
+  const matching = events
+    .filter(function(e) { return e.event === eventType; })
+    .slice(-200)
+    .reverse();
+  if (!matching.length) {
+    return '<div class="eng-empty">No events of this type recorded yet.</div>';
+  }
+  const rows = matching.map(function(e) {
+    let detail = '';
+    if (e.meta && typeof e.meta === 'object') {
+      const parts = [];
+      for (const k of Object.keys(e.meta)) {
+        parts.push(htmlEscape(k) + ': ' + htmlEscape(String(e.meta[k]).slice(0, 60)));
+      }
+      detail = parts.join(' · ');
+    }
+    return `
+      <tr>
+        <td class="muted">${htmlEscape(fmtTime(e.savedAt))}</td>
+        <td>${detail}</td>
+        <td class="muted">${htmlEscape(e.ip || '')}</td>
+        <td class="muted ua">${htmlEscape((e.ua || '').slice(0, 80))}</td>
+      </tr>
+    `;
+  }).join('');
+  return `
+    <table class="eng-table">
+      <thead><tr><th>Time</th><th>Details</th><th>IP</th><th>User-Agent</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// "Schedule opens that didn't submit" = schedule_click events whose meta
+// does NOT say submitted:true AND whose IP never appears in the leads
+// table. Approximation since we don't have a session id — good enough
+// for "how many abandoned the form" reporting.
+function renderScheduleOpensPanel(events, leads) {
+  const submitterIps = new Set(leads.map(function(l) { return l.userip; }).filter(Boolean));
+  const opens = events
+    .filter(function(e) {
+      return e.event === 'schedule_click'
+        && !(e.meta && e.meta.submitted)
+        && !submitterIps.has(e.ip);
+    })
+    .slice(-200)
+    .reverse();
+  if (!opens.length) {
+    return '<div class="eng-empty">No unconverted schedule-opens yet.</div>';
+  }
+  const rows = opens.map(function(e) {
+    return `
+      <tr>
+        <td class="muted">${htmlEscape(fmtTime(e.savedAt))}</td>
+        <td class="muted">${htmlEscape(e.ip || '')}</td>
+        <td class="muted ua">${htmlEscape((e.ua || '').slice(0, 80))}</td>
+      </tr>
+    `;
+  }).join('');
+  return `
+    <table class="eng-table">
+      <thead><tr><th>Time</th><th>IP</th><th>User-Agent</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
   `;
 }
 
@@ -323,7 +473,7 @@ function renderLeadsHtml(leads, queueStats) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Leads · Admin</title>
-  <meta http-equiv="refresh" content="30">
+  <meta http-equiv="refresh" content="30" id="autoRefreshMeta">
   <style>
     *{box-sizing:border-box}
     body{font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f4f6f8;margin:0;padding:24px;color:#222}
@@ -372,6 +522,22 @@ function renderLeadsHtml(leads, queueStats) {
     .eng-breakdown{font-size:11px;color:#6a747d;margin-top:4px;display:flex;gap:12px}
     .eng-breakdown b{color:#0b304a;font-weight:700}
     .eng-note{font-size:10px;color:#8a95a0;margin-top:6px;line-height:1.35}
+    .eng-card{cursor:pointer;transition:transform .12s, box-shadow .12s, background .12s}
+    .eng-card:hover{background:#fff;box-shadow:0 2px 6px rgba(11,48,74,.08);transform:translateY(-1px)}
+    .eng-card.active{background:#fff;box-shadow:0 2px 8px rgba(11,48,74,.15);outline:2px solid #19a4ac;outline-offset:-2px}
+    .eng-expand{font-size:10px;color:#19a4ac;margin-top:6px;font-weight:700;letter-spacing:.3px}
+    .eng-card.active .eng-expand{color:#0b304a}
+    .eng-card.active .eng-expand::after{content:' (close)'}
+    .eng-panel{background:#fff;border-radius:8px;margin-top:14px;padding:14px 16px;border:1px solid #e1e7ec;max-height:520px;overflow:auto}
+    .eng-panel-title{font-size:13px;font-weight:800;color:#0b304a;margin-bottom:10px}
+    .eng-table{width:100%;border-collapse:collapse;font-size:12px}
+    .eng-table th{text-align:left;padding:6px 10px;font-size:10px;color:#7a848c;border-bottom:1px solid #eef1f4;font-weight:700;text-transform:uppercase;letter-spacing:.4px;background:#fafbfc}
+    .eng-table td{padding:7px 10px;border-bottom:1px solid #f2f4f7;font-size:12px;vertical-align:top}
+    .eng-table td.ua{font-size:10px;color:#8a95a0;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .eng-table tr:hover td{background:#f8fafc}
+    .eng-table a{color:#19a4ac;text-decoration:none}
+    .eng-table a:hover{text-decoration:underline}
+    .eng-empty{padding:24px;text-align:center;color:#8a95a0;font-size:12px}
   </style>
 </head><body>
 <div class="wrap">
@@ -390,7 +556,10 @@ function renderLeadsHtml(leads, queueStats) {
 
   ${renderSummaryCards(summary, queueStats || { pending: 0, size: 0, maxSize: 30 })}
 
-  ${renderEngagementCards(computeEngagement(readAllEvents()), leads.length)}
+  ${(function() {
+    const events = readAllEvents();
+    return renderEngagementCards(computeEngagement(events), leads, events);
+  })()}
 
   ${leads.length === 0 ? `
     <div class="empty">No form submissions yet — but call clicks and page views are still being tracked in the Engagement card above. Submit one on the public site to see it appear here.</div>
@@ -426,6 +595,46 @@ document.querySelectorAll('.cb-chip').forEach(function(btn){
     applyFilters();
   });
 });
+
+// Engagement card click → toggle the matching detail panel. Only one open
+// at a time. While any panel is open we disable the meta-refresh so the
+// user's inspection doesn't get wiped mid-scroll.
+(function(){
+  var cards = document.querySelectorAll('.eng-card');
+  var panels = document.querySelectorAll('.eng-panel');
+  function closeAll(){
+    cards.forEach(function(c){ c.classList.remove('active'); });
+    panels.forEach(function(p){ p.hidden = true; });
+  }
+  function setRefresh(enabled){
+    var m = document.getElementById('autoRefreshMeta');
+    if (!m) return;
+    if (enabled) m.setAttribute('content', '30');
+    else m.removeAttribute('content');
+  }
+  cards.forEach(function(card){
+    card.addEventListener('click', function(){
+      var key = card.getAttribute('data-panel');
+      var target = document.querySelector('.eng-panel[data-panel="' + key + '"]');
+      var isOpen = card.classList.contains('active');
+      closeAll();
+      if (!isOpen && target){
+        card.classList.add('active');
+        target.hidden = false;
+        setRefresh(false);
+        // Scroll the panel into view but keep cards visible for context
+        setTimeout(function(){
+          target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      } else {
+        setRefresh(true);
+      }
+    });
+    card.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+    });
+  });
+})();
 </script>
 </body></html>`;
 }

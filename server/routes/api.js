@@ -223,33 +223,52 @@ router.post('/submit',
  *
  * Events are appended to /data/events.jsonl. Admin page aggregates them for
  * "N people clicked the call button this week" style reporting.
- *
- * Body: { event: string, meta?: object }
- * - event is capped to 40 chars of [a-z0-9_]
- * - meta is capped to 1 KB JSON
  */
 const ALLOWED_EVENTS = new Set([
-  'call_click',       // any phone-call CTA tapped
-  'schedule_click',   // "Schedule a free consultation" button
-  'learn_more_click', // "Learn More" button
-  'slider_move',      // debt slider first interaction
-  'tab_click',        // one of the How-It-Works tabs
-  'faq_click',        // FAQ toggle
-  'form_start',       // first focus on any form input
-  'form_error',       // client-side validation blocked a submit
-  'page_view'         // per-page landing beacon (sanity check)
+  'call_click', 'schedule_click', 'learn_more_click', 'slider_move',
+  'tab_click', 'faq_click', 'form_start', 'form_error', 'page_view'
 ]);
 
+// Permissive limiter for the tracker endpoint. A single page load can fire
+// 5-15 events legitimately (page view + ~3 tab clicks + FAQ opens + scroll
+// interactions), so the lead-form limiter's 5-per-15-min is obviously
+// wrong here. 200/min per IP catches flood abuse without ever blocking a
+// real user.
+const trackerLimiter = require('express-rate-limit')({
+  windowMs: 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip
+});
+
+// sendBeacon sends blobs that still carry Content-Type: application/json.
+// But *some* Safari versions strip the header, so accept text/plain too —
+// we parse the body ourselves either way to be defensive.
+const rawJsonBody = express.raw({ type: '*/*', limit: '8kb' });
+
 router.post('/track',
-  rateLimiter,
+  trackerLimiter,
+  rawJsonBody,
   (req, res) => {
     try {
-      const rawEvent = String(req.body && req.body.event || '').toLowerCase().trim();
+      // Parse whatever came in. Body might be a Buffer (raw middleware),
+      // an already-parsed object (if express.json ran first), or empty.
+      let body = req.body;
+      if (Buffer.isBuffer(body)) {
+        const str = body.toString('utf8').trim();
+        try { body = str ? JSON.parse(str) : {}; } catch (_) { body = {}; }
+      } else if (!body || typeof body !== 'object') {
+        body = {};
+      }
+      const rawEvent = String(body.event || '').toLowerCase().trim();
       if (!ALLOWED_EVENTS.has(rawEvent)) {
+        // Log silently so we can track bad payloads without noise
+        console.warn(`[TRACK] Rejected unknown event: "${rawEvent}"`);
         return res.status(400).json({ success: false, message: 'Unknown event' });
       }
       // Cap meta to 1 KB to prevent log blowout.
-      let meta = req.body && req.body.meta;
+      let meta = body.meta;
       if (meta && typeof meta === 'object') {
         try {
           const s = JSON.stringify(meta);
@@ -258,18 +277,20 @@ router.post('/track',
       } else {
         meta = null;
       }
-      leadStore.saveEvent({
+      const saved = leadStore.saveEvent({
         event: rawEvent,
         ip: req.ip,
         ua: (req.headers['user-agent'] || '').slice(0, 200),
         ref: (req.headers.referer || '').slice(0, 200),
         meta: meta
       });
+      if (!saved) {
+        console.error(`[TRACK] saveEvent returned false for "${rawEvent}" — check /data is writable`);
+      }
       res.json({ success: true });
     } catch (err) {
-      // Tracker must never 500 — it's on the hot path
       console.error(`[TRACK ERROR] ${err.message}`);
-      res.json({ success: false });
+      res.status(500).json({ success: false });
     }
   }
 );
