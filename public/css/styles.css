@@ -552,6 +552,39 @@ a { color: inherit; text-decoration: none; }
   text-decoration: underline;
 }
 
+/* Error state on the consent checkbox — highlights the whole row so the
+   user can't miss why submission was blocked. */
+.form-checkbox.error {
+  background: #fff5f5;
+  border: 1px solid #f5c6c6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: -11px -13px 16px;
+}
+.form-checkbox.error input[type="checkbox"] {
+  outline: 2px solid #e74c3c;
+  outline-offset: 2px;
+  accent-color: #e74c3c;
+}
+.form-checkbox.error span {
+  color: #b12a2a;
+}
+
+/* Shake animation used to draw attention to a missed required field
+   (right now: the "I agree" consent checkbox). Short, one-shot. */
+@keyframes form-shake {
+  0%,100% { transform: translateX(0); }
+  15% { transform: translateX(-6px); }
+  30% { transform: translateX(6px); }
+  45% { transform: translateX(-5px); }
+  60% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+  90% { transform: translateX(2px); }
+}
+.shake {
+  animation: form-shake 0.5s ease-in-out;
+}
+
 .btn-submit {
   margin-top: 8px;
 }

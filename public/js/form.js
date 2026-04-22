@@ -68,9 +68,45 @@
     }
     if (!validateField('dob', dobValid, 'You must be 18 or older.')) valid = false;
     if (!validateField('state', state !== '', 'Please select your state.')) valid = false;
-    if (!validateField('pripolicy', pripolicy, 'You must agree to the privacy policy.')) valid = false;
+    if (!validateField('pripolicy', pripolicy, 'Please check the box to agree before continuing.')) {
+      valid = false;
+      shakeConsent();
+    }
 
     return valid;
+  }
+
+  // Shake + highlight the consent row, and scroll it into view so the user
+  // sees exactly what they missed. Triggered when they hit Continue without
+  // checking the "I agree to the Privacy Policy" box.
+  function shakeConsent() {
+    var cb = document.getElementById('pripolicy');
+    if (!cb) return;
+    var wrapper = cb.closest('.form-checkbox');
+    if (!wrapper) return;
+    wrapper.classList.add('error');
+    // Restart the animation if it's already running (re-clicks shouldn't be silent)
+    wrapper.classList.remove('shake');
+    // Force reflow so removing+re-adding actually restarts the keyframes
+    void wrapper.offsetWidth;
+    wrapper.classList.add('shake');
+    wrapper.addEventListener('animationend', function onEnd() {
+      wrapper.classList.remove('shake');
+      wrapper.removeEventListener('animationend', onEnd);
+    });
+    // Bring the checkbox into view (below the fold on small screens)
+    try { wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(_) {}
+  }
+
+  // Clear the consent error state as soon as the user checks the box
+  var pripolicyCb = document.getElementById('pripolicy');
+  if (pripolicyCb) {
+    pripolicyCb.addEventListener('change', function() {
+      if (pripolicyCb.checked) {
+        var wrapper = pripolicyCb.closest('.form-checkbox');
+        if (wrapper) wrapper.classList.remove('error');
+      }
+    });
   }
 
   // Get user IP
