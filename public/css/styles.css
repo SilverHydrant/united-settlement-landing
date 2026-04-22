@@ -926,6 +926,14 @@ a { color: inherit; text-decoration: none; }
   text-align: center;
 }
 
+.trust-bar-asterisk {
+  font-size: 0.55em;
+  font-weight: 700;
+  color: rgba(25, 164, 172, 0.6);
+  top: -0.6em;
+  margin-left: 1px;
+}
+
 .trust-bar-num {
   font-size: 36px;
   font-weight: 900;
@@ -1039,13 +1047,13 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---- How It Works section (tabs card overlaps banner below) ----
-   padding-top instead of negative margin-top + child margin so the white
-   background extends continuously from the banner edge down through the
-   content. Using a child margin was causing margin-collapse and left a
-   strip of page background visible. */
+   Negative margin-top pulls the tabs card up into the banner for the
+   classic "card rises out of hero" look. No hero-bubble child here
+   anymore so no margin-collapse problem to worry about. */
 .how-section {
-  padding: 60px 0 50px;
-  background: #ffffff;
+  padding: 0 0 50px;
+  background: transparent;
+  margin-top: -50px;
 }
 
 .how-section .container {
