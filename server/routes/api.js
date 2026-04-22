@@ -249,25 +249,18 @@ const rawJsonBody = express.raw({ type: '*/*', limit: '8kb' });
 
 router.post('/track',
   trackerLimiter,
-  rawJsonBody,
   (req, res) => {
+    // At this point the GLOBAL express.json middleware in server/index.js
+    // has already parsed the body. Whatever came through is in req.body.
+    // No per-route parser needed — adding one here (express.raw) was
+    // stomping on the already-parsed body and silently losing events.
     try {
-      // Parse whatever came in. Body might be a Buffer (raw middleware),
-      // an already-parsed object (if express.json ran first), or empty.
-      let body = req.body;
-      if (Buffer.isBuffer(body)) {
-        const str = body.toString('utf8').trim();
-        try { body = str ? JSON.parse(str) : {}; } catch (_) { body = {}; }
-      } else if (!body || typeof body !== 'object') {
-        body = {};
-      }
+      const body = (req.body && typeof req.body === 'object') ? req.body : {};
       const rawEvent = String(body.event || '').toLowerCase().trim();
       if (!ALLOWED_EVENTS.has(rawEvent)) {
-        // Log silently so we can track bad payloads without noise
-        console.warn(`[TRACK] Rejected unknown event: "${rawEvent}"`);
+        console.warn(`[TRACK] 400 unknown event="${rawEvent}" body=${JSON.stringify(body).slice(0,200)}`);
         return res.status(400).json({ success: false, message: 'Unknown event' });
       }
-      // Cap meta to 1 KB to prevent log blowout.
       let meta = body.meta;
       if (meta && typeof meta === 'object') {
         try {
@@ -284,15 +277,46 @@ router.post('/track',
         ref: (req.headers.referer || '').slice(0, 200),
         meta: meta
       });
-      if (!saved) {
-        console.error(`[TRACK] saveEvent returned false for "${rawEvent}" — check /data is writable`);
-      }
-      res.json({ success: true });
+      console.log(`[TRACK] ${rawEvent} saved=${saved} ip=${req.ip}`);
+      res.json({ success: saved !== false });
     } catch (err) {
-      console.error(`[TRACK ERROR] ${err.message}`);
+      console.error(`[TRACK ERROR] ${err.message}\n${err.stack}`);
       res.status(500).json({ success: false });
     }
   }
 );
+
+// Diagnostic endpoint: proves whether /data is writable, and reports what
+// the leadStore would actually do. Useful when the admin page shows zeros
+// but 200s are flying in — tells us immediately whether the volume mount
+// is the problem or whether something upstream is eating the body.
+router.get('/track-diag', (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  const dir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+  const probe = path.join(dir, '.track-diag-probe');
+  const result = { dataDir: dir, env: process.env.DATA_DIR || null };
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    result.mkdir = 'ok';
+  } catch (e) {
+    result.mkdir = 'error: ' + e.message;
+  }
+  try {
+    fs.writeFileSync(probe, 'ok\n', 'utf8');
+    result.write = 'ok';
+    fs.unlinkSync(probe);
+    result.cleanup = 'ok';
+  } catch (e) {
+    result.write = 'error: ' + e.message;
+  }
+  try {
+    const ls = fs.readdirSync(dir);
+    result.files = ls.slice(0, 20);
+  } catch (e) {
+    result.files = 'error: ' + e.message;
+  }
+  res.json(result);
+});
 
 module.exports = router;
