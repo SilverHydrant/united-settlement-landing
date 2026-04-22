@@ -759,10 +759,10 @@ a { color: inherit; text-decoration: none; }
   font-weight: 700;
 }
 
-/* Trust line above the big legal paragraph — short, quietly reassuring,
-   sits right below the Continue button so it's the last thing the user
-   reads before the dense legalese. */
-.form-no-sell {
+/* Trust line right below the Continue button — combines the timing
+   commitment ("within 24 hours") with the no-sale promise. Short and
+   reassuring, reads before the fine-print disclaimer. */
+.form-reassurance {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -773,14 +773,15 @@ a { color: inherit; text-decoration: none; }
   margin-top: 14px;
   margin-bottom: 0;
   line-height: 1.4;
+  flex-wrap: wrap;
 }
 
-.form-no-sell svg {
+.form-reassurance svg {
   color: #19a4ac;
   flex-shrink: 0;
 }
 
-.form-no-sell strong {
+.form-reassurance strong {
   color: #0b304a;
   font-weight: 800;
 }
