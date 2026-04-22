@@ -92,7 +92,18 @@
 
   document.querySelectorAll('.how-tab').forEach(function(tab) {
     tab.addEventListener('click', function() {
-      activateHowPanel(tab.getAttribute('data-panel'));
+      var panel = tab.getAttribute('data-panel');
+      // Direct tab click (user tapped "Let's Begin!" / "Negotiations" /
+      // "Pay Off Settlements" / "Financial Freedom" at the top of the card).
+      // Separate event from "Next phase →" clicks so Meta can build two
+      // different retarget audiences — explorers vs linear-progress users.
+      if (window.Pixel) {
+        window.Pixel.fire('TabClick', {
+          content_name: 'how_it_works_tab_' + panel,
+          content_category: 'how_it_works_engagement'
+        });
+      }
+      activateHowPanel(panel);
     });
   });
 
@@ -151,11 +162,25 @@
   }
 
   // Accordion toggle
-  document.querySelectorAll('.accordion-btn').forEach(function(btn) {
+  document.querySelectorAll('.accordion-btn').forEach(function(btn, idx) {
     btn.addEventListener('click', function() {
       var item = btn.parentElement;
       var content = item.querySelector('.accordion-content');
       var isOpen = item.classList.contains('open');
+
+      // Pixel: fire on OPEN (not on close) so the event signals real
+      // engagement with a question's answer. Fires once per accordion
+      // open, re-fires if the same question is opened again.
+      if (!isOpen && window.Pixel) {
+        // Pull the question text out of the button — trim the trailing
+        // "+"/"−" arrow character for a cleaner event payload.
+        var qText = (btn.innerText || '').replace(/\s*[+\u2212\u2013-]\s*$/, '').trim();
+        window.Pixel.fire('FAQClick', {
+          content_name: 'faq_' + (idx + 1),
+          content_category: 'faq_engagement',
+          content_ids: [qText.slice(0, 80)]
+        });
+      }
 
       // Close all items in same accordion
       item.parentElement.querySelectorAll('.accordion-item').forEach(function(i) {
