@@ -6,6 +6,13 @@ FROM mcr.microsoft.com/playwright:v1.59.1-jammy
 
 WORKDIR /app
 
+# gosu lets the entrypoint run as root, fix /data's ownership after Railway
+# mounts the volume, then exec the real app as pwuser without a sub-shell.
+# Small install (~2MB); rm cleans the apt lists so the image doesn't grow.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install only production deps. Playwright is in dependencies (not dev) so it
 # installs fine here; the browser binary is already in the base image.
 COPY package*.json ./
@@ -14,15 +21,16 @@ RUN npm ci --omit=dev
 # Copy app source (.dockerignore excludes node_modules, .git, etc.)
 COPY . .
 
-# Create the data dir for lead storage (writable by pwuser). When a Railway
-# Volume is mounted at /data it'll replace this, but Railway preserves
-# ownership when the mount point exists with the right perms.
-RUN mkdir -p /data && chown -R pwuser:pwuser /data /app
+# Build-time chown of /data. This is a seed value — Railway's volume mount at
+# runtime replaces /data with a root-owned filesystem, so entrypoint.sh is
+# what actually makes /data writable for pwuser in production.
+RUN mkdir -p /data && chown -R pwuser:pwuser /data /app \
+    && chmod +x /app/entrypoint.sh
 
 # Railway sets PORT at runtime; expose for documentation.
 EXPOSE 3000
 
-# Run as non-root for security (the base image creates 'pwuser')
-USER pwuser
-
+# Don't set `USER pwuser` here — the entrypoint needs root to chown /data
+# after the volume mount, then drops to pwuser itself via gosu.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "server/index.js"]
