@@ -29,9 +29,19 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// CORS
+// CORS — ALLOWED_ORIGIN can be a single origin or a comma-separated list
+// (e.g. "https://myunitedsettlement.com,https://*.up.railway.app"). Requests
+// without an Origin header (same-origin, curl, server-to-server) always pass.
+const allowedOrigins = (process.env.ALLOWED_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS: ' + origin));
+  },
   methods: ['GET', 'POST'],
   credentials: true
 }));
