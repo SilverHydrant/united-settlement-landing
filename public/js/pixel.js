@@ -73,7 +73,7 @@
     },
 
     callClicked: function() {
-      this.fireOnce('Contact', {
+      this.fireOnce('Lead', {
         content_name: 'click_to_call',
         content_category: 'phone_call'
       });
