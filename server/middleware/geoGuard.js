@@ -61,7 +61,15 @@ function lookup(req) {
   if (!ip) return null;
   const geo = geoip.lookup(ip);
   if (!geo) return null;
-  return { country: geo.country, region: geo.region };
+  // We expose city + timezone too so the frontend can pre-fill location
+  // fields and adapt time copy. State (region) is the most-used field for
+  // the v2 callback form's state dropdown.
+  return {
+    country:  geo.country,
+    region:   geo.region,
+    city:     geo.city || null,
+    timezone: geo.timezone || null
+  };
 }
 
 function blockedHtml() {
@@ -115,8 +123,10 @@ function geoInfoHandler(req, res) {
   const g = req.geo || {};
   const isCalifornia = g.country === 'US' && g.region === 'CA';
   res.json({
-    country: g.country || null,
-    region: g.region || null,
+    country:  g.country || null,
+    region:   g.region || null,
+    city:     g.city || null,
+    timezone: g.timezone || null,
     isCalifornia
   });
 }

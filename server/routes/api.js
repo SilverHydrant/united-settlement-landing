@@ -9,6 +9,7 @@ const { enqueue, getStats, isFull, recordDuration } = require('../services/leadQ
 const leadStatus = require('../services/leadStatus');
 const leadStore = require('../services/leadStore');
 const { sendAlert } = require('../services/alerter');
+const { parseCookies, COOKIE_NAME } = require('../middleware/abVariant');
 
 // Submission strategy:
 //   primary  — Playwright bot walks the live unitedsettlement.com form
@@ -270,8 +271,20 @@ router.post('/track',
       } else {
         meta = null;
       }
+      // Stamp the A/B variant from the usv cookie (server-side source of
+      // truth — more reliable than asking the client to tag every event).
+      // Falls back to meta.variant for backwards compat with events that
+      // were tagged before the cookie existed.
+      const cookies = parseCookies(req.headers.cookie);
+      let variant = cookies[COOKIE_NAME];
+      if (variant !== 'a' && variant !== 'b') {
+        if (meta && meta.variant === 'option_b') variant = 'b';
+        else if (meta && meta.variant === 'option_a') variant = 'a';
+        else variant = null;
+      }
       const saved = leadStore.saveEvent({
         event: rawEvent,
+        variant: variant,
         ip: req.ip,
         ua: (req.headers['user-agent'] || '').slice(0, 200),
         ref: (req.headers.referer || '').slice(0, 200),

@@ -21,6 +21,7 @@ const {
   readAllEvents
 } = require('../services/leadStore');
 const { getStats } = require('../services/leadQueue');
+const abConfig = require('../lib/abConfig');
 
 function requireAdmin(req, res, next) {
   const pw = process.env.ADMIN_PASSWORD;
@@ -548,6 +549,7 @@ function renderLeadsHtml(leads, queueStats) {
       <div class="auto-refresh">Auto-refreshes every 30 seconds · Last loaded ${new Date().toLocaleString()}</div>
     </div>
     <div class="actions">
+      <a href="/admin/jarvis" style="background:#0e1726;color:#19c8d2;border:1px solid #19c8d2">⚡ Mission Control</a>
       <a href="/admin/leads" style="background:#19a4ac">Refresh now</a>
       <a href="/admin/leads.csv" class="alt">Download CSV</a>
       <a href="/admin/leads.json" class="alt">JSON</a>
@@ -686,5 +688,707 @@ router.get('/stats', requireAdmin, (req, res) => {
 router.get('/events.json', requireAdmin, (req, res) => {
   res.json(readAllEvents());
 });
+
+/* ============================================================
+   A/B test stats + suspicious-traffic analysis
+   ============================================================
+   /admin/api/ab-stats       → JSON snapshot of variant performance,
+                                config state, and flagged IPs.
+   /admin/api/ab-config      → POST { mode, weightB } to update split.
+   /admin/jarvis             → "Mission Control" dashboard HTML.
+*/
+
+// Anything matching this regex on the User-Agent string is treated as a
+// likely-bot signal. Conservative — false positives waste a row in the
+// admin panel; false negatives let botnets pad event counts.
+const BOT_UA_RX = /(curl|wget|python-requests|python\/|httpclient|libwww|java\/|go-http|node-fetch|axios|okhttp|headlesschrome|phantomjs|puppeteer|playwright|selenium|crawler|spider|bot\b|scrape)/i;
+
+function isBotUA(ua) {
+  if (!ua) return true; // missing UA is itself suspicious
+  return BOT_UA_RX.test(ua);
+}
+
+/**
+ * Build a per-IP rollup from the event log. Returns an array of:
+ *   { ip, events, calls, schedules, pageViews, variants:Set, sampleUA,
+ *     firstAt, lastAt, maxBurstPerMin, flags:[reasons] }
+ *
+ * Flags applied:
+ *   BOT-UA          User-Agent matches BOT_UA_RX or is missing
+ *   NO-CALLS        ≥10 events but zero call_clicks
+ *   MULTI-VARIANT   Same IP saw both 'a' and 'b' (cookie clearing /
+ *                   shared NAT — combined with high volume = bot signal)
+ *   RAPID-FIRE      Any 60-second window had ≥20 events from this IP
+ *   HIGH-VOLUME     ≥50 events from one IP in last 24h (just informational)
+ */
+function analyzeIPs(events) {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const byIp = {};
+
+  for (const e of events) {
+    const ip = e.ip || '';
+    if (!ip) continue;
+    if (!byIp[ip]) {
+      byIp[ip] = {
+        ip,
+        events: 0,
+        calls: 0,
+        schedules: 0,
+        pageViews: 0,
+        formStarts: 0,
+        variants: new Set(),
+        sampleUA: e.ua || '',
+        firstAt: e.savedAt,
+        lastAt: e.savedAt,
+        timestamps: []
+      };
+    }
+    const r = byIp[ip];
+    r.events++;
+    if (e.event === 'call_click') r.calls++;
+    if (e.event === 'schedule_click') r.schedules++;
+    if (e.event === 'page_view') r.pageViews++;
+    if (e.event === 'form_start') r.formStarts++;
+    if (e.variant === 'a' || e.variant === 'b') r.variants.add(e.variant);
+    if (e.savedAt) {
+      r.lastAt = e.savedAt;
+      const t = Date.parse(e.savedAt);
+      if (isFinite(t)) r.timestamps.push(t);
+    }
+    // Keep the earliest UA so we can detect bot UAs even if they later
+    // rotated to a real-looking one.
+    if (e.ua && (!r.sampleUA || isBotUA(r.sampleUA) === false && isBotUA(e.ua))) {
+      r.sampleUA = e.ua;
+    }
+  }
+
+  const rows = [];
+  for (const ip of Object.keys(byIp)) {
+    const r = byIp[ip];
+    // Compute the worst 60-second burst by sliding window over sorted ts
+    r.timestamps.sort((a, b) => a - b);
+    let maxBurst = 0;
+    let j = 0;
+    for (let i = 0; i < r.timestamps.length; i++) {
+      while (r.timestamps[i] - r.timestamps[j] > 60_000) j++;
+      const burst = i - j + 1;
+      if (burst > maxBurst) maxBurst = burst;
+    }
+    r.maxBurstPerMin = maxBurst;
+
+    // Recent (24h) event count for the HIGH-VOLUME flag
+    let recent = 0;
+    for (const t of r.timestamps) {
+      if (nowMs - t < DAY_MS) recent++;
+    }
+    r.events24h = recent;
+
+    const flags = [];
+    if (isBotUA(r.sampleUA)) flags.push('BOT-UA');
+    if (r.events >= 10 && r.calls === 0) flags.push('NO-CALLS');
+    if (r.variants.size >= 2) flags.push('MULTI-VARIANT');
+    if (r.maxBurstPerMin >= 20) flags.push('RAPID-FIRE');
+    if (r.events24h >= 50) flags.push('HIGH-VOLUME');
+    r.flags = flags;
+
+    rows.push({
+      ip: r.ip,
+      events: r.events,
+      events24h: r.events24h,
+      calls: r.calls,
+      schedules: r.schedules,
+      pageViews: r.pageViews,
+      formStarts: r.formStarts,
+      variants: Array.from(r.variants),
+      sampleUA: r.sampleUA.slice(0, 140),
+      firstAt: r.firstAt,
+      lastAt: r.lastAt,
+      maxBurstPerMin: r.maxBurstPerMin,
+      flags: r.flags,
+      // Internal sort weight: more flags + more events = more suspicious
+      _sortKey: flags.length * 1000 + Math.min(r.events, 999)
+    });
+  }
+
+  // Suspicious = at least one flag. Top of list = most suspicious.
+  const suspicious = rows
+    .filter((r) => r.flags.length > 0)
+    .sort((a, b) => b._sortKey - a._sortKey)
+    .slice(0, 100);
+
+  // Top by raw volume regardless of flags (so legitimate hot IPs are visible)
+  const topByVolume = rows
+    .slice()
+    .sort((a, b) => b.events - a.events)
+    .slice(0, 25);
+
+  return {
+    totalIps: rows.length,
+    suspiciousCount: suspicious.length,
+    suspicious,
+    topByVolume
+  };
+}
+
+/**
+ * Build a complete A/B stats snapshot. Returns:
+ *   {
+ *     config: {...},
+ *     variants: { a: {...}, b: {...} },
+ *     leader: 'a' | 'b' | null,
+ *     deltaPct: number,        // +X% means leader is X% better
+ *     suspicious: { suspicious:[...], topByVolume:[...], totalIps, ... }
+ *   }
+ */
+function buildAbSnapshot() {
+  const events = readAllEvents();
+  const tally = abConfig.tallyByVariant(events);
+  const cfg = abConfig.get();
+
+  const fmtVariant = (key) => {
+    const t = tally[key];
+    const pv = t.pv;
+    const calls = t.calls;
+    const convRate = pv > 0 ? calls / pv : 0;
+    return {
+      pageViews: pv,
+      calls: calls,
+      schedules: t.schedules,
+      formStarts: t.forms,
+      conversionRate: convRate,
+      conversionPct: (convRate * 100).toFixed(2)
+    };
+  };
+
+  const a = fmtVariant('a');
+  const b = fmtVariant('b');
+
+  // Leader = whichever variant has the higher conversion rate, but only
+  // declare a winner if BOTH have at least the cold-start threshold.
+  // Otherwise we surface "TBD" so the admin doesn't read a leader off
+  // 5 sample points.
+  let leader = null;
+  let deltaPct = 0;
+  if (a.pageViews >= abConfig.COLD_START_MIN_PAGEVIEWS &&
+      b.pageViews >= abConfig.COLD_START_MIN_PAGEVIEWS &&
+      (a.calls + b.calls) > 0) {
+    if (a.conversionRate > b.conversionRate) {
+      leader = 'a';
+      deltaPct = b.conversionRate > 0
+        ? ((a.conversionRate - b.conversionRate) / b.conversionRate) * 100
+        : 100;
+    } else if (b.conversionRate > a.conversionRate) {
+      leader = 'b';
+      deltaPct = a.conversionRate > 0
+        ? ((b.conversionRate - a.conversionRate) / a.conversionRate) * 100
+        : 100;
+    }
+  }
+
+  return {
+    config: {
+      mode: cfg.mode,
+      weightB: cfg.weightB,
+      weightA: 1 - cfg.weightB,
+      coldStartMin: abConfig.COLD_START_MIN_PAGEVIEWS,
+      weightFloor: abConfig.WEIGHT_FLOOR,
+      weightCeil: abConfig.WEIGHT_CEIL,
+      updatedAt: cfg.updatedAt,
+      updatedBy: cfg.updatedBy,
+      history: (cfg.history || []).slice(-20)
+    },
+    variants: { a, b },
+    leader,
+    deltaPct: Math.round(deltaPct * 10) / 10,
+    suspicious: analyzeIPs(events),
+    serverNow: new Date().toISOString()
+  };
+}
+
+router.get('/api/ab-stats', requireAdmin, (req, res) => {
+  res.json(buildAbSnapshot());
+});
+
+router.post('/api/ab-config', requireAdmin, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const patch = {};
+  if (body.mode === 'manual' || body.mode === 'auto') patch.mode = body.mode;
+  if (body.weightB != null) {
+    const w = Number(body.weightB);
+    if (isFinite(w)) patch.weightB = w;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ ok: false, error: 'Nothing to update' });
+  }
+  // Tag with the basic-auth username so the audit trail in history.updatedBy
+  // is more useful than just "admin".
+  let by = 'admin';
+  try {
+    const h = req.headers.authorization || '';
+    if (h.startsWith('Basic ')) {
+      const decoded = Buffer.from(h.slice(6), 'base64').toString('utf8');
+      const idx = decoded.indexOf(':');
+      if (idx > 0) by = decoded.slice(0, idx) || 'admin';
+    }
+  } catch (_) {}
+  const updated = abConfig.update(patch, by);
+  res.json({ ok: true, config: updated });
+});
+
+router.get('/jarvis', requireAdmin, (req, res) => {
+  res.type('html').send(renderJarvisHtml());
+});
+
+function renderJarvisHtml() {
+  // The dashboard polls /admin/api/ab-stats every 4s and re-renders. All
+  // computation happens server-side; the page is just a presentation
+  // shell. Stats come back as JSON, and the front-end painter swaps
+  // numbers in place so the screen feels live without flicker.
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Control · United Settlement</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#05080d; --bg2:#0a1320; --panel:#0e1726; --panel-2:#13202f;
+    --line:#1c2c41; --line-soft:#172435;
+    --cyan:#19c8d2; --cyan-bright:#3df5ff; --cyan-soft:#0e6e76;
+    --red:#ff3b48; --red-soft:#7a1820;
+    --green:#2ecc8c; --amber:#f5b400;
+    --text:#cfe3f0; --text-dim:#7a8fa3; --text-muted:#4d6378;
+    --mono:'SF Mono','Menlo','Consolas','Roboto Mono',monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  html,body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh}
+  body{
+    background:
+      radial-gradient(1200px 800px at 50% -20%, rgba(25,200,210,.07) 0%, transparent 60%),
+      radial-gradient(800px 600px at 100% 100%, rgba(255,59,72,.05) 0%, transparent 70%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+    background-attachment:fixed;
+  }
+  body::before{
+    content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+    background-image:
+      linear-gradient(0deg, rgba(25,200,210,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(25,200,210,.03) 1px, transparent 1px);
+    background-size:44px 44px;
+    mask-image:radial-gradient(ellipse at 50% 30%, #000 30%, transparent 80%);
+  }
+  .wrap{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:24px}
+
+  /* Top bar */
+  .topbar{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:24px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand-mark{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--cyan) 0%, var(--cyan-soft) 100%);display:flex;align-items:center;justify-content:center;color:#001216;font-weight:900;font-family:var(--mono);font-size:18px;box-shadow:0 0 22px rgba(25,200,210,.4)}
+  .brand-text{display:flex;flex-direction:column}
+  .brand-title{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--cyan);letter-spacing:3px;text-transform:uppercase}
+  .brand-sub{font-size:11px;color:var(--text-dim);letter-spacing:1.5px;text-transform:uppercase}
+  .topbar-right{display:flex;align-items:center;gap:14px}
+  .live-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--cyan-soft);border-radius:999px;font-family:var(--mono);font-size:11px;color:var(--cyan);text-transform:uppercase;letter-spacing:2px}
+  .live-dot{width:7px;height:7px;border-radius:999px;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.3)}}
+  .topbar-time{font-family:var(--mono);font-size:12px;color:var(--text-dim);letter-spacing:1px}
+  .topbar-link{font-family:var(--mono);font-size:11px;color:var(--text-dim);text-decoration:none;text-transform:uppercase;letter-spacing:1.5px;border:1px solid var(--line);padding:7px 12px;border-radius:6px;transition:all .15s}
+  .topbar-link:hover{color:var(--cyan);border-color:var(--cyan-soft)}
+
+  /* Section heading */
+  .section-head{display:flex;align-items:center;gap:12px;margin:32px 0 14px}
+  .section-bar{flex:1;height:1px;background:linear-gradient(90deg, var(--cyan-soft) 0%, transparent 100%)}
+  .section-title{font-family:var(--mono);font-size:11px;color:var(--cyan);letter-spacing:3px;text-transform:uppercase;font-weight:700}
+
+  /* Variant arms */
+  .arms{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .arm{position:relative;background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);border:1px solid var(--line);border-radius:12px;padding:22px;overflow:hidden;transition:border-color .25s, box-shadow .25s}
+  .arm.leader{border-color:var(--cyan);box-shadow:0 0 30px rgba(25,200,210,.25), inset 0 0 0 1px rgba(25,200,210,.15)}
+  .arm-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+  .arm-tag{font-family:var(--mono);font-size:11px;color:var(--text-dim);letter-spacing:3px;text-transform:uppercase}
+  .arm-name{font-size:22px;font-weight:900;color:var(--text);margin-top:2px;letter-spacing:-.3px}
+  .arm-leader-pill{display:none;background:rgba(25,200,210,.12);border:1px solid var(--cyan-soft);color:var(--cyan);font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 10px;border-radius:4px;letter-spacing:2px;text-transform:uppercase}
+  .arm.leader .arm-leader-pill{display:inline-flex;align-items:center;gap:6px}
+  .arm.leader .arm-leader-pill::before{content:'▲';color:var(--cyan)}
+  .arm-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:18px}
+  .stat{}
+  .stat-label{font-family:var(--mono);font-size:10px;color:var(--text-muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px}
+  .stat-value{font-family:var(--mono);font-size:32px;font-weight:700;color:var(--text);line-height:1;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .stat-value.big{font-size:40px;color:var(--cyan-bright)}
+  .arm.leader .stat-value.big{text-shadow:0 0 18px rgba(61,245,255,.5)}
+  .stat-unit{font-size:14px;color:var(--text-muted);font-weight:400;margin-left:4px}
+  .arm-conv-line{padding-top:14px;border-top:1px solid var(--line-soft);font-family:var(--mono);font-size:11px;color:var(--text-dim);letter-spacing:1px}
+  .arm-conv-line b{color:var(--cyan);font-weight:700}
+
+  /* Verdict bar between arms */
+  .verdict{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 22px;display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap}
+  .verdict-text{font-family:var(--mono);font-size:13px;letter-spacing:1px;color:var(--text-dim)}
+  .verdict-text b{color:var(--text);font-weight:700}
+  .verdict-text .delta{color:var(--cyan-bright);font-weight:700}
+  .verdict-text.tbd{color:var(--text-muted)}
+
+  /* Mode + slider control panel */
+  .control{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px}
+  .control-row{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:18px}
+  .mode-toggle{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:3px;gap:0}
+  .mode-btn{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;background:transparent;border:none;color:var(--text-dim);padding:9px 18px;border-radius:999px;cursor:pointer;transition:all .2s}
+  .mode-btn.active{background:var(--cyan);color:#001216;font-weight:800;box-shadow:0 0 16px rgba(25,200,210,.4)}
+  .mode-btn:not(.active):hover{color:var(--text)}
+  .control-meta{font-family:var(--mono);font-size:11px;color:var(--text-muted);letter-spacing:1px}
+  .slider-row{display:flex;align-items:center;gap:18px}
+  .slider-end{font-family:var(--mono);font-size:13px;letter-spacing:1px;font-weight:700;color:var(--text);min-width:70px}
+  .slider-end.right{text-align:right}
+  .slider-wrap{flex:1;position:relative;height:42px;display:flex;align-items:center}
+  .slider-track{position:absolute;left:0;right:0;height:8px;border-radius:999px;background:linear-gradient(90deg, rgba(25,200,210,.18) 0%, rgba(25,200,210,.18) var(--w), rgba(255,255,255,.05) var(--w), rgba(255,255,255,.05) 100%);border:1px solid var(--line)}
+  .slider-track::after{content:'';position:absolute;left:0;width:var(--w);top:0;bottom:0;border-radius:999px;background:linear-gradient(90deg, rgba(255,59,72,.55) 0%, var(--cyan) 100%);box-shadow:0 0 14px rgba(25,200,210,.4)}
+  .slider-input{position:relative;width:100%;-webkit-appearance:none;appearance:none;background:transparent;height:42px;cursor:pointer;z-index:2}
+  .slider-input:disabled{cursor:not-allowed;opacity:.5}
+  .slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--cyan-bright);border:2px solid #001216;box-shadow:0 0 18px rgba(61,245,255,.6);cursor:pointer}
+  .slider-input::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:var(--cyan-bright);border:2px solid #001216;box-shadow:0 0 18px rgba(61,245,255,.6);cursor:pointer}
+  .ramp-history{margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft);font-family:var(--mono);font-size:11px;color:var(--text-muted);letter-spacing:.5px;line-height:1.7}
+  .ramp-history b{color:var(--text-dim)}
+
+  /* Suspicious traffic panel */
+  .sus-panel{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .sus-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--line)}
+  .sus-head-title{font-family:var(--mono);font-size:13px;color:var(--text);letter-spacing:2px;text-transform:uppercase}
+  .sus-head-stat{font-family:var(--mono);font-size:11px;color:var(--text-dim);letter-spacing:1px}
+  .sus-head-stat b{color:var(--red);font-weight:700}
+  .sus-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+  .sus-table th{text-align:left;padding:10px 12px;color:var(--text-muted);font-size:10px;letter-spacing:2px;text-transform:uppercase;background:var(--panel-2);border-bottom:1px solid var(--line);font-weight:700}
+  .sus-table td{padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top;color:var(--text-dim)}
+  .sus-table tr:hover td{background:rgba(25,200,210,.04)}
+  .sus-table .ip{color:var(--text);font-weight:700;letter-spacing:.5px}
+  .sus-table .ua{color:var(--text-muted);font-size:10px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .flag{display:inline-block;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:1.5px;padding:2px 6px;border-radius:3px;margin-right:4px;margin-bottom:2px;border:1px solid currentColor;background:rgba(255,255,255,.02)}
+  .flag.bot-ua{color:var(--red)}
+  .flag.no-calls{color:var(--amber)}
+  .flag.multi-variant{color:#a685ff}
+  .flag.rapid-fire{color:var(--red)}
+  .flag.high-volume{color:var(--cyan)}
+  .sus-empty{padding:40px;text-align:center;color:var(--text-muted);font-family:var(--mono);font-size:12px;letter-spacing:1px}
+
+  .small{font-size:11px;color:var(--text-muted);letter-spacing:.5px}
+  .num-flicker{transition:color .25s}
+
+  @media (max-width: 720px){
+    .arms{grid-template-columns:1fr}
+    .control-row{flex-direction:column;align-items:flex-start}
+    .stat-value{font-size:26px}
+    .stat-value.big{font-size:32px}
+  }
+</style>
+</head><body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">U</div>
+      <div class="brand-text">
+        <div class="brand-title">Mission Control</div>
+        <div class="brand-sub">United Settlement · A/B Telemetry</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="live-pill"><span class="live-dot"></span> Live</span>
+      <span class="topbar-time" id="serverClock">--:--:--</span>
+      <a href="/admin/leads" class="topbar-link">Leads ↗</a>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Arm Performance</div>
+    <div class="section-bar"></div>
+  </div>
+
+  <div class="arms">
+    <div class="arm" id="armA">
+      <div class="arm-head">
+        <div>
+          <div class="arm-tag">Variant A</div>
+          <div class="arm-name">Original (v1)</div>
+        </div>
+        <div class="arm-leader-pill">Leader</div>
+      </div>
+      <div class="arm-stats">
+        <div class="stat">
+          <div class="stat-label">Page Views</div>
+          <div class="stat-value num-flicker" data-stat="a.pageViews">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Call Clicks</div>
+          <div class="stat-value num-flicker" data-stat="a.calls">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Schedule Opens</div>
+          <div class="stat-value num-flicker" data-stat="a.schedules">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Conversion Rate</div>
+          <div class="stat-value big num-flicker" data-stat="a.conversionPct">—<span class="stat-unit">%</span></div>
+        </div>
+      </div>
+      <div class="arm-conv-line">
+        Split allocation: <b data-stat="config.weightAPct">—%</b>
+      </div>
+    </div>
+
+    <div class="arm" id="armB">
+      <div class="arm-head">
+        <div>
+          <div class="arm-tag">Variant B</div>
+          <div class="arm-name">Call-First (v2)</div>
+        </div>
+        <div class="arm-leader-pill">Leader</div>
+      </div>
+      <div class="arm-stats">
+        <div class="stat">
+          <div class="stat-label">Page Views</div>
+          <div class="stat-value num-flicker" data-stat="b.pageViews">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Call Clicks</div>
+          <div class="stat-value num-flicker" data-stat="b.calls">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Schedule Opens</div>
+          <div class="stat-value num-flicker" data-stat="b.schedules">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Conversion Rate</div>
+          <div class="stat-value big num-flicker" data-stat="b.conversionPct">—<span class="stat-unit">%</span></div>
+        </div>
+      </div>
+      <div class="arm-conv-line">
+        Split allocation: <b data-stat="config.weightBPct">—%</b>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict" id="verdict">
+    <div class="verdict-text tbd" id="verdictText">Awaiting cold-start data — both arms need ≥<span data-stat="config.coldStartMin">50</span> page views before a leader is declared.</div>
+    <div class="small" id="verdictMeta">Updated <span id="updatedAt">—</span></div>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Split Control</div>
+    <div class="section-bar"></div>
+  </div>
+
+  <div class="control">
+    <div class="control-row">
+      <div class="mode-toggle" role="tablist">
+        <button class="mode-btn" data-mode="manual" id="modeManual">◆ Manual</button>
+        <button class="mode-btn" data-mode="auto" id="modeAuto">↻ Auto-Ramp</button>
+      </div>
+      <div class="control-meta" id="modeStatus">—</div>
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-end">A · <span data-stat="config.weightAPct">—%</span></div>
+      <div class="slider-wrap" style="--w:50%">
+        <input type="range" min="0" max="100" step="1" value="50" class="slider-input" id="splitSlider">
+      </div>
+      <div class="slider-end right"><span data-stat="config.weightBPct">—%</span> · B</div>
+    </div>
+
+    <div class="ramp-history" id="rampHistory">
+      <b>Ramp history will appear here once the split has been adjusted.</b>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Suspicious Traffic</div>
+    <div class="section-bar"></div>
+  </div>
+
+  <div class="sus-panel">
+    <div class="sus-head">
+      <div class="sus-head-title">⚠ Flagged IPs</div>
+      <div class="sus-head-stat"><b id="susCount">0</b> flagged · <span id="totalIps">0</span> total IPs seen</div>
+    </div>
+    <div id="susTableWrap">
+      <div class="sus-empty">Scanning event log…</div>
+    </div>
+  </div>
+
+  <div style="margin-top:32px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-muted);letter-spacing:2px">
+    Data refreshes every 4 seconds · /admin/api/ab-stats
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  var state = { config: {}, lastSnapshot: null };
+
+  function fmt(n){ if (n == null) return '—'; if (typeof n === 'number') return n.toLocaleString(); return String(n); }
+  function pct(x){ return (Math.round(x * 1000) / 10) + '%'; }
+
+  function setStat(key, value){
+    document.querySelectorAll('[data-stat="' + key + '"]').forEach(function(el){
+      var prev = el.textContent;
+      // Preserve trailing inline tags (e.g. .stat-unit) by writing to first text node
+      var next = String(value);
+      if (el.querySelector('.stat-unit')){
+        var unit = el.querySelector('.stat-unit').outerHTML;
+        el.innerHTML = next + unit;
+      } else {
+        el.textContent = next;
+      }
+      if (prev !== next && prev !== '—'){
+        el.style.color = 'var(--cyan-bright)';
+        setTimeout(function(){ el.style.color = ''; }, 350);
+      }
+    });
+  }
+
+  function paint(s){
+    state.lastSnapshot = s;
+    state.config = s.config;
+
+    setStat('a.pageViews', fmt(s.variants.a.pageViews));
+    setStat('a.calls', fmt(s.variants.a.calls));
+    setStat('a.schedules', fmt(s.variants.a.schedules));
+    setStat('a.conversionPct', s.variants.a.conversionPct);
+    setStat('b.pageViews', fmt(s.variants.b.pageViews));
+    setStat('b.calls', fmt(s.variants.b.calls));
+    setStat('b.schedules', fmt(s.variants.b.schedules));
+    setStat('b.conversionPct', s.variants.b.conversionPct);
+
+    setStat('config.weightAPct', pct(s.config.weightA));
+    setStat('config.weightBPct', pct(s.config.weightB));
+    setStat('config.coldStartMin', s.config.coldStartMin);
+
+    // Leader highlight
+    document.getElementById('armA').classList.toggle('leader', s.leader === 'a');
+    document.getElementById('armB').classList.toggle('leader', s.leader === 'b');
+
+    // Verdict text
+    var v = document.getElementById('verdictText');
+    if (s.leader){
+      v.classList.remove('tbd');
+      var name = s.leader === 'a' ? 'Variant A (Original)' : 'Variant B (Call-First)';
+      v.innerHTML = '<b>' + name + '</b> is leading by <span class="delta">+' + s.deltaPct + '%</span> in conversion rate ('
+        + s.variants[s.leader].conversionPct + '% vs ' + s.variants[s.leader === 'a' ? 'b' : 'a'].conversionPct + '%).';
+    } else {
+      v.classList.add('tbd');
+      v.innerHTML = 'Awaiting cold-start data — both arms need ≥<span>' + s.config.coldStartMin + '</span> page views before a leader is declared.';
+    }
+    document.getElementById('updatedAt').textContent = new Date(s.serverNow).toLocaleTimeString();
+
+    // Mode buttons
+    var manual = document.getElementById('modeManual');
+    var auto = document.getElementById('modeAuto');
+    manual.classList.toggle('active', s.config.mode === 'manual');
+    auto.classList.toggle('active', s.config.mode === 'auto');
+    document.getElementById('modeStatus').textContent =
+      s.config.mode === 'auto'
+        ? 'Auto-ramp active · weight rebalances every 60s based on conversion'
+        : 'Manual mode · drag slider to set traffic split';
+
+    // Slider — only writable in manual mode. Don't fight the user mid-drag.
+    var sl = document.getElementById('splitSlider');
+    sl.disabled = (s.config.mode !== 'manual');
+    if (!sl.matches(':active')){
+      var pctB = Math.round(s.config.weightB * 100);
+      sl.value = pctB;
+      sl.parentElement.style.setProperty('--w', pctB + '%');
+    }
+
+    // Ramp history (last 8)
+    var hist = (s.config.history || []).slice(-8).reverse();
+    var rh = document.getElementById('rampHistory');
+    if (!hist.length){
+      rh.innerHTML = '<b>Ramp history will appear here once the split has been adjusted.</b>';
+    } else {
+      rh.innerHTML = hist.map(function(h){
+        var t = new Date(h.ts).toLocaleTimeString();
+        return '<b>' + t + '</b> · ' + h.mode.toUpperCase() + ' → B=' + Math.round(h.weightB*100) + '% <span style="color:var(--text-muted)">(' + (h.reason || h.updatedBy || 'admin') + ')</span>';
+      }).join('<br>');
+    }
+
+    // Suspicious traffic
+    document.getElementById('susCount').textContent = s.suspicious.suspiciousCount;
+    document.getElementById('totalIps').textContent = s.suspicious.totalIps;
+    var rows = s.suspicious.suspicious;
+    var wrap = document.getElementById('susTableWrap');
+    if (!rows.length){
+      wrap.innerHTML = '<div class="sus-empty">No suspicious activity detected. All clean. ✓</div>';
+    } else {
+      var html = '<table class="sus-table"><thead><tr><th>IP</th><th>Flags</th><th>Events</th><th>Calls</th><th>Burst/min</th><th>Variants</th><th>Last Seen</th><th>User-Agent</th></tr></thead><tbody>';
+      rows.forEach(function(r){
+        var flagsHtml = r.flags.map(function(f){
+          return '<span class="flag ' + f.toLowerCase() + '">' + f + '</span>';
+        }).join('');
+        html += '<tr>'
+          + '<td class="ip">' + r.ip + '</td>'
+          + '<td>' + flagsHtml + '</td>'
+          + '<td>' + r.events + ' <span class="small">(' + r.events24h + '/24h)</span></td>'
+          + '<td>' + r.calls + '</td>'
+          + '<td>' + r.maxBurstPerMin + '</td>'
+          + '<td>' + (r.variants.join('+') || '—') + '</td>'
+          + '<td>' + new Date(r.lastAt).toLocaleString() + '</td>'
+          + '<td class="ua" title="' + (r.sampleUA || '').replace(/"/g,'&quot;') + '">' + (r.sampleUA || '—') + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+      wrap.innerHTML = html;
+    }
+  }
+
+  function tickClock(){
+    var d = new Date();
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    document.getElementById('serverClock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  setInterval(tickClock, 1000); tickClock();
+
+  function fetchSnapshot(){
+    fetch('/admin/api/ab-stats', { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(paint)
+      .catch(function(err){ console.error('snapshot failed', err); });
+  }
+  fetchSnapshot();
+  setInterval(fetchSnapshot, 4000);
+
+  // Mode toggle
+  document.querySelectorAll('.mode-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var mode = btn.getAttribute('data-mode');
+      fetch('/admin/api/ab-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mode: mode })
+      }).then(function(r){ return r.json(); }).then(function(){
+        fetchSnapshot();
+      });
+    });
+  });
+
+  // Slider — debounce while dragging, commit on release
+  var sl = document.getElementById('splitSlider');
+  function commitSlider(){
+    var pctB = Number(sl.value) / 100;
+    fetch('/admin/api/ab-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ weightB: pctB })
+    }).then(function(r){ return r.json(); }).then(function(){
+      fetchSnapshot();
+    });
+  }
+  sl.addEventListener('input', function(){
+    sl.parentElement.style.setProperty('--w', sl.value + '%');
+  });
+  sl.addEventListener('change', commitSlider);
+})();
+</script>
+</body></html>`;
+}
 
 module.exports = router;

@@ -7,6 +7,8 @@ const path = require('path');
 const apiRoutes = require('./routes/api');
 const adminRoutes = require('./routes/admin');
 const { geoGuard, geoInfoHandler } = require('./middleware/geoGuard');
+const { abVariant } = require('./middleware/abVariant');
+const abConfig = require('./lib/abConfig');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -113,8 +115,15 @@ app.use(geoGuard);
 // show the California CPRA notice banner. Returns { isCalifornia, country, region }.
 app.get('/api/geo', geoInfoHandler);
 
-// Serve static files
-app.use(express.static(path.join(__dirname, '..', 'public'), { etag: false, lastModified: false }));
+// Serve static files. We disable the implicit "index" lookup so that
+// requests to "/" fall through to the abVariant-aware handler below
+// instead of being short-circuited by express.static handing back
+// public/index.html before we can pick a variant.
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  etag: false,
+  lastModified: false,
+  index: false
+}));
 
 // API routes
 app.use('/api', apiRoutes);
@@ -122,10 +131,33 @@ app.use('/api', apiRoutes);
 // Admin routes (Basic Auth gated by ADMIN_PASSWORD env var)
 app.use('/admin', adminRoutes);
 
-// SPA fallback - serve index.html for any non-API route
+// A/B-routed homepage. abVariant sets req.variant ('a' | 'b') based on
+// the usv cookie / ?v=a|b URL param / weighted random assignment, then
+// we serve the matching HTML file.
+app.get(['/', '/index.html'], abVariant, (req, res) => {
+  const file = req.variant === 'b' ? 'option-b.html' : 'index.html';
+  res.sendFile(path.join(__dirname, '..', 'public', file));
+});
+
+// Force-variant URLs for sharing / QA. /v1 and /v2 always serve their
+// respective version regardless of the assigned cookie. They also
+// write the cookie so the visitor stays locked on that variant.
+app.get(['/v1'], abVariant, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+app.get(['/v2', '/test-look-2'], abVariant, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'option-b.html'));
+});
+
+// SPA fallback - serve index.html for any other non-API route. Variant
+// routing only applies to the canonical homepage URLs above; deep-linked
+// junk like /random-path falls through to v1 to avoid breaking shares.
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
+
+// Kick off the auto-rebalance loop (no-op when mode === 'manual').
+abConfig.startRebalanceLoop();
 
 app.listen(PORT, () => {
   console.log(`United Settlement Landing Page running on port ${PORT}`);
