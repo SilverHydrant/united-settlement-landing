@@ -455,6 +455,49 @@ a:hover { text-decoration: underline; }
 }
 .trust-pill sup { color: var(--teal-bright); }
 
+/* ---- Compact reviews strip — directly under the trust pills ---- */
+.hero-reviews {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px 28px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.hero-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+  text-decoration: none;
+  color: #cfd8df;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
+}
+.hero-review:hover {
+  background: rgba(255,255,255,.10);
+  border-color: rgba(255,255,255,.22);
+  transform: translateY(-1px);
+}
+.hero-review-logo {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -.2px;
+}
+.hero-review-stars {
+  color: #f5b041;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.hero-review-rating { color: #e6edf2; font-weight: 600; }
+.hero-review-rating b { color: #fff; font-weight: 900; margin-right: 2px; }
+
 /* ============================================================
    QUALIFIER — savings calculator, premium card on ice bg
    ============================================================ */
@@ -1765,6 +1808,10 @@ sup .disclosure-ast { font-size: inherit; }
   .why-grid { grid-template-columns: 1fr; }
   .hero-trust { grid-template-columns: repeat(2, 1fr); gap: 18px 0; row-gap: 22px; }
   .trust-pill:nth-child(3)::before { display: none; }
+  .hero-reviews { gap: 10px 14px; margin-top: 14px; padding-top: 14px; }
+  .hero-review { padding: 6px 12px; font-size: 11px; gap: 8px; }
+  .hero-review-logo { font-size: 12px; }
+  .hero-review-stars { font-size: 11px; letter-spacing: .5px; }
 }
 
 @media (max-width: 767px) {
