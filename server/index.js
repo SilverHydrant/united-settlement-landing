@@ -16,15 +16,15 @@ const PORT = process.env.PORT || 3000;
 // Security headers (relaxed for landing page with Meta Pixel + Google Fonts)
 app.use(helmet({
   contentSecurityPolicy: {
-    directives: {
+directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://connect.facebook.net", "https://www.facebook.com", "https://fonts.googleapis.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://connect.facebook.net", "https://www.facebook.com", "https://fonts.googleapis.com", "https://analytics.tiktok.com"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https://www.facebook.com", "https://*.facebook.com"],
-      connectSrc: ["'self'", "https://api.ipify.org", "https://www.facebook.com"],
+      connectSrc: ["'self'", "https://api.ipify.org", "https://www.facebook.com", "https://analytics.tiktok.com", "https://ads.tiktok.com"],
       frameSrc: ["https://www.facebook.com"],
-      upgradeInsecureRequests: null  // Disable on localhost (HTTP) - Railway provides HTTPS
+      upgradeInsecureRequests: null // Disable on localhost (HTTP) - Railway provides HTTPS
     }
   },
   crossOriginEmbedderPolicy: false,
