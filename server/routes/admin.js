@@ -339,6 +339,163 @@ function renderEngagementCards(engagement, leads, events) {
   `;
 }
 
+// Session timing — bot vs. human heuristic.
+//
+// Walks events.jsonl, groups by meta.sid (random per-pageload id stamped
+// by tracker.js), and for each session computes:
+//   duration_ms      — from session_end meta if present, else last - first
+//                      observed event timestamp.
+//   first_click_ms   — from time_to_first_click meta if present.
+//   interactions     — count of meaningful clicks (everything but
+//                      page_view/session_end/time_to_first_click).
+//   variant          — 'a' / 'b' (server-stamped on each event).
+//
+// We then surface medians + bot-shape buckets:
+//   <3s sessions         — instant bounce, near-certain bot
+//   0-interaction sessions — landed and left without touching anything
+//   <500ms first click   — automation, not a real tap
+//   long humans          — >30s with >=1 interaction
+//
+// Older events (pre-tracker session-id) get a synthetic sid so they don't
+// pollute the bot bucket. We just skip sessions with no sid in meta.
+function computeSessionMetrics(events) {
+  const sessions = new Map(); // sid -> { firstMs, lastMs, durationMs, firstClickMs, interactions, variant }
+  const NON_INTERACTION = new Set(['page_view', 'session_end', 'time_to_first_click']);
+
+  for (const e of events) {
+    const sid = e.meta && e.meta.sid;
+    if (!sid) continue;
+    const t = Date.parse(e.savedAt || e.ts || 0);
+    if (!isFinite(t)) continue;
+    let s = sessions.get(sid);
+    if (!s) {
+      s = {
+        firstMs: t, lastMs: t,
+        durationMs: null, firstClickMs: null,
+        interactions: 0, variant: null
+      };
+      sessions.set(sid, s);
+    }
+    if (t < s.firstMs) s.firstMs = t;
+    if (t > s.lastMs)  s.lastMs  = t;
+    if (!s.variant && (e.variant === 'a' || e.variant === 'b')) s.variant = e.variant;
+    if (e.event === 'session_end' && e.meta && typeof e.meta.duration_ms === 'number') {
+      s.durationMs = e.meta.duration_ms;
+    }
+    if (e.event === 'time_to_first_click' && e.meta && typeof e.meta.ms_to_first === 'number') {
+      s.firstClickMs = e.meta.ms_to_first;
+    }
+    if (!NON_INTERACTION.has(e.event)) s.interactions++;
+  }
+
+  // Backfill duration from observed timestamps if no session_end fired
+  for (const s of sessions.values()) {
+    if (s.durationMs == null) s.durationMs = Math.max(0, s.lastMs - s.firstMs);
+  }
+
+  function median(arr) {
+    if (!arr.length) return 0;
+    const sorted = arr.slice().sort(function(x, y) { return x - y; });
+    const m = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[m] : Math.round((sorted[m - 1] + sorted[m]) / 2);
+  }
+
+  function bucket(filter) {
+    const list = Array.from(sessions.values()).filter(filter);
+    const durations = list.map(function(s) { return s.durationMs; });
+    const firstClicks = list.map(function(s) { return s.firstClickMs; })
+      .filter(function(v) { return typeof v === 'number'; });
+    const fastBounce = list.filter(function(s) { return s.durationMs < 3000; }).length;
+    const noInteract = list.filter(function(s) { return s.interactions === 0; }).length;
+    const instaClick = firstClicks.filter(function(v) { return v < 500; }).length;
+    const longHuman  = list.filter(function(s) { return s.durationMs >= 30000 && s.interactions >= 1; }).length;
+    return {
+      total: list.length,
+      medianDurationMs: median(durations),
+      medianFirstClickMs: median(firstClicks),
+      fastBounce: fastBounce,
+      fastBouncePct: list.length ? Math.round(fastBounce * 100 / list.length) : 0,
+      noInteract: noInteract,
+      noInteractPct: list.length ? Math.round(noInteract * 100 / list.length) : 0,
+      instaClick: instaClick,
+      longHuman: longHuman,
+      longHumanPct: list.length ? Math.round(longHuman * 100 / list.length) : 0
+    };
+  }
+
+  return {
+    overall: bucket(function() { return true; }),
+    a:       bucket(function(s) { return s.variant === 'a'; }),
+    b:       bucket(function(s) { return s.variant === 'b'; })
+  };
+}
+
+function fmtMs(ms) {
+  if (!ms || ms < 0) return '\u2014';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  return m + 'm ' + s + 's';
+}
+
+function renderSessionMetricsCards(metrics) {
+  const o = metrics.overall;
+  const a = metrics.a;
+  const b = metrics.b;
+  if (!o.total) return '';
+  // One block per metric, with the variant split underneath. Color cues:
+  // green = healthy human signal, red = likely-bot signal, gray = neutral.
+  const card = function(label, value, color, sub, note) {
+    return `
+      <div class="eng-card" style="border-top-color:${color};cursor:default">
+        <div class="eng-label">${label}</div>
+        <div class="eng-value" style="font-size:1.6rem">${value}</div>
+        <div class="eng-breakdown">${sub}</div>
+        ${note ? `<div class="eng-note">${note}</div>` : ''}
+      </div>
+    `;
+  };
+  const split = function(aVal, bVal) {
+    return `<span title="Variant A">A: <b>${aVal}</b></span> <span title="Variant B">B: <b>${bVal}</b></span>`;
+  };
+  return `
+    <div class="eng-section">
+      <div class="eng-title">Session quality \u2014 time on site, time-to-click, bot-shape buckets</div>
+      <div class="eng-cards">
+        ${card('\u23F1 Median time on site',
+            fmtMs(o.medianDurationMs), '#1a7a6d',
+            split(fmtMs(a.medianDurationMs), fmtMs(b.medianDurationMs)),
+            'How long the median visitor sticks around')}
+        ${card('\u23F2 Median time-to-first-click',
+            fmtMs(o.medianFirstClickMs), '#19a4ac',
+            split(fmtMs(a.medianFirstClickMs), fmtMs(b.medianFirstClickMs)),
+            'Real users pause to read; bots click fast')}
+        ${card('\u26A0 Bounced under 3s',
+            o.fastBouncePct + '% (' + o.fastBounce + ')', '#c0392b',
+            split(a.fastBouncePct + '%', b.fastBouncePct + '%'),
+            'Likely bots / accidental opens')}
+        ${card('\uD83D\uDC7B 0 interactions',
+            o.noInteractPct + '% (' + o.noInteract + ')', '#7f8c8d',
+            split(a.noInteractPct + '%', b.noInteractPct + '%'),
+            'Landed, didn\u2019t touch a thing')}
+        ${card('\uD83E\uDD16 Insta-click <500ms',
+            o.instaClick.toString(), '#c0392b',
+            split(a.instaClick, b.instaClick),
+            'Faster than human reaction time')}
+        ${card('\uD83D\uDC64 Engaged \u226530s + click',
+            o.longHumanPct + '% (' + o.longHuman + ')', '#1a7a6d',
+            split(a.longHumanPct + '%', b.longHumanPct + '%'),
+            'Real evaluators worth optimizing for')}
+        ${card('\uD83D\uDCDA Sessions with timing',
+            o.total.toLocaleString(), '#0b304a',
+            split(a.total, b.total),
+            'Pageloads with the new tracker SID')}
+      </div>
+    </div>
+  `;
+}
+
 // Newest-first mini-table of leads — name, phone, email, state, debt, time.
 // Same shape as the big leads table but trimmed and shown inline when the
 // user taps the "Form submissions" card.
@@ -560,7 +717,8 @@ function renderLeadsHtml(leads, queueStats) {
 
   ${(function() {
     const events = readAllEvents();
-    return renderEngagementCards(computeEngagement(events), leads, events);
+    return renderEngagementCards(computeEngagement(events), leads, events) +
+           renderSessionMetricsCards(computeSessionMetrics(events));
   })()}
 
   ${leads.length === 0 ? `

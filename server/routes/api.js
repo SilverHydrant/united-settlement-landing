@@ -227,7 +227,13 @@ router.post('/submit',
  */
 const ALLOWED_EVENTS = new Set([
   'call_click', 'schedule_click', 'learn_more_click', 'slider_move',
-  'tab_click', 'faq_click', 'form_start', 'form_error', 'page_view'
+  'tab_click', 'faq_click', 'form_start', 'form_error', 'page_view',
+  // Bot-vs-human heuristics — the tracker now reports session timing so
+  // the admin page can flag bouncing bots vs. real evaluators.
+  'session_end', 'time_to_first_click',
+  // Off-hours-routed call clicks (variant B): user tapped a tel: button
+  // outside 9am-9pm ET so we sent them to the schedule modal instead.
+  'call_click_offhours'
 ]);
 
 // Permissive limiter for the tracker endpoint. A single page load can fire

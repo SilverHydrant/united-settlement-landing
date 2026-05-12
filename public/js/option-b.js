@@ -34,13 +34,26 @@
   // ---- Every phone-call link on the page ----
   // data-call-source attribute lets us tell hero / sticky / FAB / footer
   // apart in the admin events table.
+  // Off-hours (window.__usOffHours, set further down): we never want a user
+  // tapping a tel: link to ring an empty room. Intercept the click, route
+  // them straight into the callback-schedule modal, and tag the tracker
+  // event so admin can split closed-hours-clicks from real calls.
   document.querySelectorAll('a[href^="tel:"]').forEach(function(el) {
-    el.addEventListener('click', function() {
+    el.addEventListener('click', function(e) {
+      var src = el.getAttribute('data-call-source') || el.id || 'tel_link';
+      if (window.__usOffHours) {
+        e.preventDefault();
+        if (window.Tracker) {
+          window.Tracker.track('call_click_offhours', { source: src });
+        }
+        if (window.Pixel) window.Pixel.scheduleClicked();
+        var cb = document.getElementById('callbackLink');
+        if (cb) cb.click();
+        return;
+      }
       if (window.Pixel) window.Pixel.callClicked();
       if (window.Tracker) {
-        window.Tracker.callClick({
-          source: el.getAttribute('data-call-source') || el.id || 'tel_link'
-        });
+        window.Tracker.callClick({ source: src });
       }
     });
   });
@@ -131,17 +144,58 @@
   }
   var et = getETHour();
   var open = et >= 9 && et < 21;
+  // Global flag — read by the tel:-link click handler above to route off-hours
+  // clicks straight to the schedule-callback modal instead of dialing.
+  window.__usOffHours = !open;
   if (!open) {
+    document.body.classList.add('us-offhours');
     if (heroAvailText) heroAvailText.textContent = 'We open daily at 9am Eastern';
-    if (stickyAvail)   stickyAvail.innerHTML = '●&nbsp;Opens 9am ET';
-    // Swap every CTA label to the off-hours version. We replace only the
-    // .cta-label-text span (not the parent) so the green pulsing dot
-    // stays in the DOM but is hidden via .is-closed. HTML defaults to
-    // the open-hours copy so most visitors don't see a flash.
+    if (stickyAvail)   stickyAvail.innerHTML = '●&nbsp;Schedule a callback';
+    // Replace the live "call now" copy in every CTA with neutral schedule
+    // wording. We swap only the .cta-label-text span (parent stays in the
+    // DOM so the dot/structure don't shift).
     document.querySelectorAll('.hero-cta-label').forEach(function(el) {
       el.classList.add('is-closed');
       var t = el.querySelector('.cta-label-text');
-      if (t) t.textContent = 'Call now · we open 9am ET';
+      if (t) t.textContent = 'Schedule a callback';
+    });
+    // Drop the phone number out of every CTA — the user said "say nothing"
+    // about calling when we're closed; CSS .us-offhours hides them.
+    // (Header phone, hero-cta number, sticky bar number, footer phone.)
+    var hideSel = '.hero-cta-num, .header-phone-num, .stickybar-cta span, .footer-phone, .fab span';
+    document.querySelectorAll(hideSel).forEach(function(el) {
+      // For composite buttons (sticky/footer/fab) we still want the icon
+      // visible — so we hide only the text span(s), not the link itself.
+      if (el.matches('.footer-phone')) {
+        // Replace footer-phone text with "Schedule" but keep the click flow
+        // (tel: click handler above will route to modal).
+        el.childNodes.forEach(function(n) {
+          if (n.nodeType === 3) n.textContent = ' Schedule a callback';
+        });
+        return;
+      }
+      el.style.display = 'none';
+    });
+    // FAB label: change from "Call" to "Schedule"
+    document.querySelectorAll('.fab').forEach(function(el) {
+      el.setAttribute('aria-label', 'Schedule a callback');
+      var span = el.querySelector('span');
+      if (span) { span.textContent = 'Schedule'; span.style.display = ''; }
+    });
+    // Sticky bar CTA: replace number with "Schedule" text
+    document.querySelectorAll('.stickybar-cta').forEach(function(el) {
+      el.setAttribute('aria-label', 'Schedule a callback');
+      var span = el.querySelector('span');
+      if (span) { span.textContent = 'Schedule a callback'; span.style.display = ''; }
+    });
+    // "Call Now to Start Step 1 →" button at end of How-It-Works flow
+    document.querySelectorAll('.how-next-cta').forEach(function(el) {
+      el.textContent = 'Schedule a callback to start \u2192';
+    });
+    // Big trust strip under second hero CTA ("A specialist is on right now…")
+    document.querySelectorAll('.big-cta-mini').forEach(function(el) {
+      var span = el.querySelector('span:not([class*="dot"])') || el.querySelector('span:last-child');
+      if (span) span.textContent = 'We open daily at 9am ET \u2014 leave your number, we\u2019ll call back';
     });
   } else {
     // Already correct in the HTML for the open state.

@@ -57,11 +57,31 @@ function pickRandomVariant(weightB) {
 /**
  * Express middleware. Sets req.variant and (when assigning a new visitor
  * or honoring a URL override) writes the usv cookie.
+ *
+ * KILL-SWITCH: PAUSED_VARIANT env var. If set to 'a' or 'b', that variant
+ * is paused — every visitor (including returning cookie holders and ?v=a/b
+ * URL overrides) gets the OTHER variant, and their cookie is rewritten so
+ * the assignment sticks.
+ *
+ * Default: PAUSED_VARIANT=a. The slider (variant A) is currently paused
+ * and only the red-button variant B ships. To re-enable A/B testing, set
+ * PAUSED_VARIANT to an empty string (or "none") in Railway env vars.
  */
 function abVariant(req, res, next) {
   const cookies = parseCookies(req.headers.cookie);
   // Make raw cookies available downstream so /api/track can read usv too
   req.cookies = cookies;
+
+  // 0. Kill switch — paused variant gets redirected to the other one.
+  const paused = ((process.env.PAUSED_VARIANT === undefined ? 'a' : process.env.PAUSED_VARIANT) || '')
+    .toLowerCase()
+    .trim();
+  if (paused === 'a' || paused === 'b') {
+    const force = paused === 'a' ? 'b' : 'a';
+    req.variant = force;
+    if (cookies[COOKIE_NAME] !== force) setVariantCookie(res, force);
+    return next();
+  }
 
   // 1. URL override
   const qv = (req.query && req.query.v ? String(req.query.v).toLowerCase() : '');

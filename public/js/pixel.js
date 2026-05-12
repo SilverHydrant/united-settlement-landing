@@ -81,6 +81,7 @@
         content_name: 'schedule_call',
         content_category: 'form_open'
       });
+      if (typeof ttq !== 'undefined') ttq.track('ClickButton', { content_name: 'schedule_call' });
     },
 
     leadSubmitted: function(debtAmount) {
@@ -98,6 +99,7 @@
         content_name: 'learn_more',
         content_category: 'outbound_click'
       });
+      if (typeof ttq !== 'undefined') ttq.track('ClickButton', { content_name: 'learn_more' });
     }
 
   };
